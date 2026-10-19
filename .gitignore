@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+
+# Secretos: el token del bot de Telegram vive aquí y NUNCA se sube
+.env
+
+# Mac
+.DS_Store
+
+# Datos locales y resultados de pruebas
+salidas/
+*.db
+*.sqlite
+
+# Terraform: el estado puede tener datos sensibles
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl
+
+# Paquetes
+paquete/
+*.zip
+
+# Bitácoras en PDF (solo en Drive)
+docs/bitacora/
