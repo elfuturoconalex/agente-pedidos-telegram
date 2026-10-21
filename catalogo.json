@@ -1,0 +1,22 @@
+[
+  {"id": "TOR-MAIZ", "nombre": "Tortilla de maíz", "presentacion": "kilo", "precio": 24, "existencia": 40, "sinonimos": ["tortillas", "tortilla"]},
+  {"id": "TOR-HARINA", "nombre": "Tortilla de harina", "presentacion": "paquete de 10", "precio": 38, "existencia": 12, "sinonimos": ["tortillas de harina", "tortilla"]},
+  {"id": "REF-COLA-2L", "nombre": "Refresco de cola", "presentacion": "botella de 2 litros", "precio": 42, "existencia": 18, "sinonimos": ["refresco", "coca", "soda"]},
+  {"id": "REF-COLA-600", "nombre": "Refresco de cola", "presentacion": "botella de 600 ml", "precio": 20, "existencia": 30, "sinonimos": ["refresco", "coca", "soda"]},
+  {"id": "REF-NAR-2L", "nombre": "Refresco de naranja", "presentacion": "botella de 2 litros", "precio": 38, "existencia": 0, "sinonimos": ["refresco", "naranjada", "soda"]},
+  {"id": "AGUA-GARR", "nombre": "Agua purificada", "presentacion": "garrafón de 20 litros", "precio": 45, "existencia": 8, "sinonimos": ["agua", "garrafon"]},
+  {"id": "AGUA-1L", "nombre": "Agua purificada", "presentacion": "botella de 1 litro", "precio": 14, "existencia": 25, "sinonimos": ["agua", "botella de agua"]},
+  {"id": "PAPAS-SAL", "nombre": "Papas fritas con sal", "presentacion": "bolsa de 45 g", "precio": 19, "existencia": 22, "sinonimos": ["papitas", "sabritas", "botana", "papas"]},
+  {"id": "HUEVO", "nombre": "Huevo blanco", "presentacion": "kilo", "precio": 48, "existencia": 0, "sinonimos": ["huevos", "blanquillos"]},
+  {"id": "LECHE-1L", "nombre": "Leche entera", "presentacion": "litro", "precio": 29, "existencia": 15, "sinonimos": ["leche"]},
+  {"id": "PAN-CAJA", "nombre": "Pan de caja blanco", "presentacion": "paquete grande", "precio": 52, "existencia": 6, "sinonimos": ["pan", "pan bimbo", "pan blanco"]},
+  {"id": "FRIJOL", "nombre": "Frijol negro", "presentacion": "kilo", "precio": 36, "existencia": 20, "sinonimos": ["frijoles"]},
+  {"id": "ARROZ", "nombre": "Arroz blanco", "presentacion": "kilo", "precio": 30, "existencia": 20, "sinonimos": ["arroz"]},
+  {"id": "ACEITE", "nombre": "Aceite vegetal", "presentacion": "botella de 1 litro", "precio": 48, "existencia": 10, "sinonimos": ["aceite"]},
+  {"id": "AZUCAR", "nombre": "Azúcar estándar", "presentacion": "kilo", "precio": 32, "existencia": 14, "sinonimos": ["azucar"]},
+  {"id": "CAFE", "nombre": "Café soluble", "presentacion": "frasco de 100 g", "precio": 75, "existencia": 7, "sinonimos": ["cafe", "nescafe"]},
+  {"id": "JITOMATE", "nombre": "Jitomate", "presentacion": "kilo", "precio": 28, "existencia": 9, "sinonimos": ["tomate", "jitomates", "tomates"]},
+  {"id": "CEBOLLA", "nombre": "Cebolla blanca", "presentacion": "kilo", "precio": 26, "existencia": 11, "sinonimos": ["cebollas"]},
+  {"id": "PAPEL-HIG", "nombre": "Papel higiénico", "presentacion": "paquete de 4 rollos", "precio": 40, "existencia": 16, "sinonimos": ["papel de baño", "papel"]},
+  {"id": "JABON-TRASTES", "nombre": "Jabón para trastes", "presentacion": "botella de 750 ml", "precio": 35, "existencia": 9, "sinonimos": ["jabon", "lavatrastes"]}
+]

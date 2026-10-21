@@ -2,13 +2,17 @@
 Paso 2 del Agente #3: el bot ya no repite; contesta Claude como empleado
 de Abarrotes Don Chuy (negocio ficticio) y recuerda la conversación.
 
-Todavía NO toma pedidos de verdad: eso viene después (catálogo + pedido estructurado).
+Sesión 3: Claude ya tiene su primera HERRAMIENTA: buscar_producto, que consulta
+el catálogo (catalogo.json) para dar precios y existencias reales en vez de suponer.
+Todavía NO arma ni guarda el pedido: eso viene después.
 
 Uso:  python empleado.py      (para detenerlo: Ctrl + C)
 Necesita en .env:  TELEGRAM_BOT_TOKEN=...  y  ANTHROPIC_API_KEY=...
 """
+import json
 import os
 import time
+import unicodedata
 
 import requests
 from anthropic import Anthropic
@@ -34,15 +38,60 @@ una tiendita de barrio ficticia en México.
 Reglas (siempre, sin importar el tono):
 - Breve: máximo 3 renglones. Texto plano, sin negritas ni listas largas.
 - Español de México.
-- Todavía no tienes el catálogo: NO confirmes si hay un producto ni su precio.
-  Di que con gusto y que en un momento te confirman existencia y precio.
-- No inventes horarios, precios, promociones ni datos de la tienda.
+- Antes de decir si hay un producto o cuánto cuesta, USA la herramienta buscar_producto.
+  Nunca des un precio ni confirmes existencia sin haberla consultado.
+- Si existencia es 0, di que por ahora no hay y ofrece algo parecido del catálogo si existe.
+- Si un producto no está en la lista de productos, di que no lo manejan. No menciones
+  productos, marcas ni sabores que no estén en la lista.
+- Cuando el cliente pida un producto, aunque sea general (ej. "un refresco"), usa la
+  herramienta para ver qué opciones hay de verdad antes de preguntarle cuál quiere.
+- Si hay varias presentaciones (por ejemplo 2 litros o 600 ml), pregunta cuál quiere.
+- No inventes horarios, promociones ni datos de la tienda que no estén en el catálogo.
 - No prometas nada que no puedas hacer tú mismo en este chat (pasar teléfonos,
-  mandar fotos, llamar, apartar productos). Si no sabes algo, dilo con amabilidad.
-- Puedes saludar, platicar y preguntar qué necesita el cliente y los detalles
-  que falten (cantidad, presentación)."""
+  mandar fotos, llamar, apartar productos, "checar con alguien")."""
 
-PERSONALIDAD = REGLAS + "\n\nTono:\n" + TONO
+# La lista de productos (SIN precios ni existencias) va en las instrucciones,
+# para que Claude sepa qué maneja la tienda y no invente marcas o productos.
+# Precio y existencia cambian, por eso siempre se consultan con la herramienta.
+_catalogo = json.load(open("catalogo.json", encoding="utf-8"))
+LISTA_PRODUCTOS = "\n".join(sorted({f"- {p['nombre']}" for p in _catalogo}))
+
+PERSONALIDAD = (REGLAS + "\n\nProductos que maneja la tienda (no hay otros, ni otras marcas o sabores):\n"
+                + LISTA_PRODUCTOS + "\n\nTono:\n" + TONO)
+
+# ---------- La herramienta: buscar en el catálogo ----------
+CATALOGO = json.load(open("catalogo.json", encoding="utf-8"))
+
+
+def normal(texto):
+    """Minúsculas y sin acentos, para que 'Azúcar' y 'azucar' sean lo mismo."""
+    texto = unicodedata.normalize("NFD", texto.lower())
+    return "".join(c for c in texto if unicodedata.category(c) != "Mn")
+
+
+def buscar_producto(texto):
+    """Devuelve los productos del catálogo que coinciden con lo que busca el cliente."""
+    palabras = [p for p in normal(texto).split() if len(p) > 2]
+    encontrados = []
+    for prod in CATALOGO:
+        donde = normal(" ".join([prod["nombre"], prod["presentacion"]] + prod["sinonimos"]))
+        if any(p in donde for p in palabras):
+            encontrados.append({k: prod[k] for k in ("id", "nombre", "presentacion", "precio", "existencia")})
+    return encontrados[:6]
+
+
+# La "ficha" de la herramienta que le explicamos a Claude
+HERRAMIENTAS = [{
+    "name": "buscar_producto",
+    "description": "Busca en el catálogo de Abarrotes Don Chuy. Devuelve los productos que coinciden, "
+                   "con presentación, precio en pesos y existencia (0 = agotado). "
+                   "Úsala siempre antes de dar precios o confirmar si hay algo.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"texto": {"type": "string", "description": "Lo que busca el cliente, ej. 'tortillas' o 'refresco'"}},
+        "required": ["texto"],
+    },
+}]
 
 conversaciones = {}   # chat_id -> lista de mensajes {"role", "content"}
 
@@ -64,12 +113,36 @@ def responder_con_claude(chat_id, texto):
     if historial[0]["role"] != "user":                # Claude necesita empezar con el cliente
         historial.pop(0)
 
-    r = claude.messages.create(model=MODELO, max_tokens=300, system=PERSONALIDAD, messages=historial)
-    respuesta = r.content[0].text.replace("**", "")
+    # Durante este turno, Claude puede usar herramientas varias veces (el loop del agente).
+    # Esas idas y vueltas viven en "turno"; en la memoria solo guardamos la respuesta final.
+    turno = list(historial)
+    tokens_in = tokens_out = 0
+    for _ in range(5):                                 # máximo 5 vueltas, por seguridad
+        r = claude.messages.create(model=MODELO, max_tokens=400, system=PERSONALIDAD,
+                                   tools=HERRAMIENTAS, messages=turno)
+        tokens_in += r.usage.input_tokens
+        tokens_out += r.usage.output_tokens
+
+        if r.stop_reason != "tool_use":                # ya contestó: salimos del loop
+            break
+
+        turno.append({"role": "assistant", "content": r.content})
+        resultados = []
+        for bloque in r.content:
+            if bloque.type == "tool_use" and bloque.name == "buscar_producto":
+                encontrados = buscar_producto(bloque.input.get("texto", ""))
+                print(f"   🔧 buscar_producto({bloque.input.get('texto')!r}) → {len(encontrados)} resultado(s)")
+                resultados.append({"type": "tool_result", "tool_use_id": bloque.id,
+                                   "content": json.dumps(encontrados, ensure_ascii=False)})
+        turno.append({"role": "user", "content": resultados})
+
+    respuesta = "".join(b.text for b in r.content if b.type == "text").replace("**", "").strip()
+    if not respuesta:
+        respuesta = "Perdón, me trabé tantito. ¿Me lo repites?"
     historial.append({"role": "assistant", "content": respuesta})
 
-    costo = r.usage.input_tokens / 1e6 * 1 + r.usage.output_tokens / 1e6 * 5
-    print(f"   🤖 {respuesta}\n   💰 {r.usage.input_tokens} + {r.usage.output_tokens} tokens · ${costo:.5f} USD")
+    costo = tokens_in / 1e6 * 1 + tokens_out / 1e6 * 5
+    print(f"   🤖 {respuesta}\n   💰 {tokens_in} + {tokens_out} tokens · ${costo:.5f} USD")
     return respuesta
 
 
