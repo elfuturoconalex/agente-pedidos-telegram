@@ -7,9 +7,9 @@
 | Fase | Sesiones | Qué incluye |
 |---|---|---|
 | **1. Local (mi Mac)** | 5 | Crear el bot y guardar su token de forma segura · loop del agente con un catálogo ficticio · memoria de la conversación y confirmación del pedido · guardar en una base de datos local · primer examen de conversaciones |
-| **2. AWS con Terraform** | 7 | Terraform sin llaves · ADR 001: base de datos y sus llaves (PK/SK) · base de datos y secretos · Lambdas con permisos mínimos · API Gateway + webhook seguro de Telegram · procesamiento en segundo plano y mensajes repetidos · ADR 002: eventos o directo |
+| **2. AWS con Terraform** | 7.5 | Terraform sin llaves · ADR 001: base de datos y sus llaves (PK/SK) · base de datos y secretos · Lambdas con permisos mínimos · API Gateway + webhook seguro de Telegram · ADR 002: fila SQS FIFO + DLQ (orden, reintentos, sin duplicados) · ADR 003: eventos o directo |
 | **3. Lista para producción** | 4 | Esquema del pedido y validación · corrección automática y errores claros · examen de 20–30 conversaciones · README, diagrama final y bitácora |
-| **Total** | **~16** | ~16–20 horas |
+| **Total** | **~16.5** | ~17–20 horas |
 
 ## Costo durante el desarrollo: ~5–10 USD
 
@@ -20,6 +20,7 @@
 | DynamoDB (bajo demanda) | Centavos |
 | Lambda y API Gateway | Dentro de la capa gratuita o centavos |
 | Parameter Store (estándar) | Gratis |
+| SQS (FIFO + DLQ) | Gratis (primer millón de mensajes al mes) |
 | EventBridge (si se usa) | Centavos |
 | CloudWatch Logs | Centavos |
 
@@ -34,5 +35,5 @@ Con **1,000 pedidos al mes**: ~20–50 USD en Claude más centavos de lo demás.
 | Fase | Sesiones estimadas | Sesiones reales | Costo real |
 |---|---|---|---|
 | 1 | 5 | | |
-| 2 | 7 | | |
+| 2 | 7.5 | | |
 | 3 | 4 | | |

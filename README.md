@@ -13,7 +13,7 @@ Agente de IA que conversa con clientes por **Telegram**, entiende pedidos escrit
 ## Fases del proyecto
 
 - [ ] **Fase 1:** Loop del agente y la conversación, todo en mi Mac
-- [ ] **Fase 2:** En AWS con **Terraform**: webhook de Telegram, Lambdas, base de datos, secretos (con ADRs de las decisiones)
+- [ ] **Fase 2:** En AWS con **Terraform**: webhook de Telegram, Lambdas, fila **SQS FIFO** con DLQ, base de datos y secretos (con ADRs de las decisiones)
 - [ ] **Fase 3:** Salida estructurada validada con esquema, corrección automática, errores claros y examen de conversaciones
 
 ## Arquitectura (preliminar)
@@ -26,6 +26,7 @@ Agente de IA que conversa con clientes por **Telegram**, entiende pedidos escrit
 - **Validación con esquema:** qué pasa cuando los datos están mal, cómo se corrigen y cómo se reporta el error.
 - **Modelado de datos:** qué base de datos elegir y cómo diseñar sus llaves, documentado en un ADR.
 - **Integración:** webhook seguro de Telegram, secretos cifrados y, opcionalmente, eventos para otros sistemas.
+- **Mensajes que no se pierden:** una fila **SQS FIFO** entre la recepción y el agente mantiene el orden de cada conversación, reintenta si algo falla, ignora duplicados y manda a una fila de mensajes muertos (DLQ) lo que falla varias veces.
 - **Infraestructura como código** con Terraform.
 
 ## Proyectos anteriores
