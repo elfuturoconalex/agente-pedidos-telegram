@@ -92,3 +92,39 @@ Cada sesión de trabajo queda registrada: qué hice, qué aprendí y qué proble
 
 ### Siguiente
 - **Examen de conversaciones** para cerrar la Fase 1: pedido normal, producto agotado, producto que no existe, cambio de opinión, dirección incompleta y nunca "confirmado" sin guardar.
+
+---
+
+## Sesión 4: Examen de conversaciones, cierre de la Fase 1
+*22 de octubre de 2026*
+
+### Qué hice
+- `examen_conversaciones.py`: un **cliente falso** que le escribe al agente 8 pláticas completas, sin Telegram, y revisa los resultados con datos.
+- Casos: pedido normal, huevo agotado, refresco de naranja agotado, producto que no existe, cambio de opinión, dirección incompleta, presión para confirmar sin datos y pago no aceptado.
+- Los pedidos del examen van a un archivo aparte (`salidas/pedidos_examen.json`) para no mezclarse con los reales.
+- Ajusté `empleado.py` para que el examen pueda usar al empleado sin abrir Telegram (`if __name__ == "__main__"`).
+
+### Resultados
+| Intento | Resultado | Qué encontró |
+|---|---|---|
+| 1 | 6/8 | Inventó el código `AGUA-GARF20`; ofreció refresco de naranja agotado |
+| 2 | 6/8 | Agregó dos veces los refrescos: el cliente vio $84 y se guardó $168 |
+| 3 | 7/8 | Seguía ofreciendo el refresco de naranja |
+| 4 | ✅ 8/8 | Todo correcto |
+
+En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la guardia lo corrigió (pedido guardado).
+
+### Qué aprendí
+- **La memoria guarda lo que Claude dijo, no lo que hizo ni lo que vio.** Por eso olvidaba los códigos y volvía a agregar productos.
+- **Idempotencia:** hacer lo mismo dos veces debe dar el mismo resultado. Agregar ahora "deja en 2", no "suma 2". Es la misma idea de SQS para no duplicar mensajes.
+- **El código lleva el estado y se lo muestra al modelo en cada mensaje** (pedido actual y agotados). No depende de que Claude se acuerde.
+- **Una regla escrita no basta; el dato debe estar a la vista.** Ni la regla ni la etiqueta "AGOTADO" funcionaron; sacar los agotados a otra lista sí.
+- **Lo que casi no cambia (nombre, id) va en las instrucciones; lo que cambia (precio, existencia) se consulta o se arma en cada mensaje.**
+- **Un examen con datos encuentra errores que a ojo no se ven:** el cobro doble se veía bien en la plática.
+
+### Problemas y cómo los resolví
+- **"No such file or directory"** → la terminal estaba en la carpeta del agente 2. `deactivate`, `cd` a la carpeta del agente 3 y activar su `.venv`.
+- **"command not found"** → faltaba escribir `python` antes del nombre del archivo.
+
+### Siguiente
+- **Fase 2 en AWS con Terraform:** ADR 001 (DynamoDB y sus llaves), Terraform sin llaves, base de datos y secretos.

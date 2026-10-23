@@ -44,6 +44,8 @@ Reglas (siempre, sin importar el tono):
 - Antes de decir si hay un producto o cuánto cuesta, USA la herramienta buscar_producto.
   Nunca des un precio ni confirmes existencia sin haberla consultado.
 - Si existencia es 0, di que por ahora no hay y ofrece algo parecido del catálogo si existe.
+- Antes de OFRECER o recomendar cualquier producto (también como alternativa), revisa con
+  buscar_producto que sí haya existencia. Nunca ofrezcas algo agotado.
 - Si un producto no está en la lista de productos, di que no lo manejan. No menciones
   productos, marcas ni sabores que no estén en la lista.
 - Cuando el cliente pida un producto, aunque sea general (ej. "un refresco"), usa la
@@ -55,7 +57,7 @@ Reglas (siempre, sin importar el tono):
 
 Cómo se toma un pedido:
 - Cuando el cliente diga qué quiere y cuánto, usa agregar_al_pedido con el id del producto.
-  Si no sabes el id, primero usa buscar_producto.
+  Los ids están entre paréntesis en la lista de productos: copia el id exacto, nunca lo inventes.
 - Nunca calcules precios ni totales tú: usa los que regresan las herramientas.
 - Antes de cerrar, pide la dirección de entrega y la forma de pago (efectivo o tarjeta).
 - Lee el resumen al cliente (productos, cantidades, total, dirección y pago) y pregúntale
@@ -64,14 +66,33 @@ Cómo se toma un pedido:
   está confirmado sin haberla usado, y al confirmar dale al cliente su folio.
 - Si una herramienta regresa un error, explícaselo al cliente con tus palabras."""
 
-# La lista de productos (SIN precios ni existencias) va en las instrucciones,
-# para que Claude sepa qué maneja la tienda y no invente marcas o productos.
-# Precio y existencia cambian, por eso siempre se consultan con la herramienta.
-_catalogo = json.load(open("catalogo.json", encoding="utf-8"))
-LISTA_PRODUCTOS = "\n".join(sorted({f"- {p['nombre']}" for p in _catalogo}))
-
-PERSONALIDAD = (REGLAS + "\n\nProductos que maneja la tienda (no hay otros, ni otras marcas o sabores):\n"
-                + LISTA_PRODUCTOS + "\n\nTono:\n" + TONO)
+# La lista de productos con su id (SIN precios ni existencias) va en las instrucciones,
+# para que Claude sepa qué maneja la tienda, no invente productos y no adivine ids.
+# Nombre e id casi no cambian; precio y existencia sí, por eso se consultan con la herramienta.
+# (Examen de Fase 1: la memoria solo guarda lo que Claude DIJO, no lo que VIO en las
+#  herramientas; sin los ids aquí, en el siguiente mensaje los adivinaba.)
+# Examen 2: Claude ofrecía productos agotados aunque la regla decía que no. Por eso la
+# lista se arma EN CADA MENSAJE y marca los agotados: el dato manda, no solo la regla.
+def instrucciones(chat_id):
+    # Examen 3: aun marcado "AGOTADO" junto al nombre lo seguía ofreciendo. Ahora los
+    # agotados van en OTRA lista, aparte: lo que no está a la vista no se ofrece.
+    def renglon(p):
+        return f"- {p['nombre']}, {p['presentacion']} ({p['id']})"
+    lista = "\n".join(sorted(renglon(p) for p in CATALOGO if p["existencia"] > 0))
+    agotados = "\n".join(sorted(renglon(p) for p in CATALOGO if p["existencia"] == 0)) or "(ninguno)"
+    # Examen 2: la memoria no guarda lo que Claude ya agregó, y lo volvía a agregar.
+    # Por eso le recordamos en cada mensaje cómo va el pedido (lo arma el código).
+    pedido = resumen_carrito(chat_id)
+    if pedido["productos"]:
+        estado = "\n".join(f"- {r['producto']} ({r['id']}): {r['cantidad']}" for r in pedido["productos"])
+        estado += f"\nTotal: ${pedido['total']}"
+    else:
+        estado = "(vacío)"
+    return (REGLAS + "\n\nProductos DISPONIBLES (no hay otros, ni otras marcas o sabores):\n" + lista
+            + "\n\nAGOTADOS por ahora. Nunca los ofrezcas ni los menciones como opción; "
+              "solo si el cliente los pide, dile que se acabaron:\n" + agotados
+            + "\n\nPedido actual de este cliente (ya guardado en el carrito, NO lo vuelvas a agregar):\n" + estado
+            + "\n\nTono:\n" + TONO)
 
 # ---------- La herramienta: buscar en el catálogo ----------
 CATALOGO = json.load(open("catalogo.json", encoding="utf-8"))
@@ -119,11 +140,12 @@ def agregar_al_pedido(chat_id, id_producto, cantidad):
         return {"error": f"No existe el producto '{id_producto}'. Usa buscar_producto para ver los ids."}
     if not isinstance(cantidad, int) or cantidad < 1:
         return {"error": "La cantidad debe ser un número entero mayor a 0."}
+    # Examen 2: antes SUMABA; si Claude lo pedía dos veces, el cliente pagaba doble.
+    # Ahora DEJA la cantidad en N: pedirlo dos veces da el mismo resultado (idempotente).
     carrito = pedidos_en_curso.setdefault(chat_id, {})
-    nueva = carrito.get(id_producto, 0) + cantidad
-    if nueva > prod["existencia"]:
+    if cantidad > prod["existencia"]:
         return {"error": f"Solo hay {prod['existencia']} de {prod['nombre']} ({prod['presentacion']})."}
-    carrito[id_producto] = nueva
+    carrito[id_producto] = cantidad
     return {"ok": True, "pedido": resumen_carrito(chat_id)}
 
 
@@ -185,10 +207,11 @@ HERRAMIENTAS = [
     },
     {
         "name": "agregar_al_pedido",
-        "description": "Agrega un producto al pedido del cliente. Regresa el pedido con subtotales y total.",
+        "description": "Pone un producto en el pedido con la cantidad TOTAL que quiere el cliente "
+                       "(si ya estaba, la reemplaza; no suma). Regresa el pedido con subtotales y total.",
         "input_schema": {"type": "object",
                          "properties": {"id_producto": {"type": "string", "description": "El id del catálogo, ej. 'TOR-MAIZ'"},
-                                        "cantidad": {"type": "integer", "description": "Cuántas unidades (kilos, botellas, paquetes)"}},
+                                        "cantidad": {"type": "integer", "description": "Cantidad TOTAL de ese producto (kilos, botellas, paquetes)"}},
                          "required": ["id_producto", "cantidad"]},
     },
     {
@@ -256,7 +279,7 @@ def responder_con_claude(chat_id, texto, nombre_cliente="cliente"):
     pedido_guardado = False                            # ¿confirmar_pedido funcionó en este turno?
     aviso_dado = False
     for _ in range(8):                                 # máximo 8 vueltas, por seguridad
-        r = claude.messages.create(model=MODELO, max_tokens=400, system=PERSONALIDAD,
+        r = claude.messages.create(model=MODELO, max_tokens=400, system=instrucciones(chat_id),
                                    tools=HERRAMIENTAS, messages=turno)
         tokens_in += r.usage.input_tokens
         tokens_out += r.usage.output_tokens
@@ -297,44 +320,52 @@ def responder_con_claude(chat_id, texto, nombre_cliente="cliente"):
     return respuesta
 
 
-print("🛒 Abarrotes Don Chuy abierto. Escríbele al bot en Telegram. (Ctrl + C para cerrar)")
-siguiente = 0
-try:
-    while True:
-        try:
-            updates = recibir_mensajes(siguiente)
-        except requests.HTTPError as e:
-            codigo = e.response.status_code
-            print(f"⚠️  Telegram respondió {codigo}. Reintento en 5 s...")
-            time.sleep(5)
-            continue
-        except requests.RequestException as e:
-            print(f"⚠️  Sin conexión con Telegram ({type(e).__name__}). Reintento en 5 s...")
-            time.sleep(5)
-            continue
-
-        for update in updates:
-            siguiente = update["update_id"] + 1
-            mensaje = update.get("message")
-            if not mensaje or "text" not in mensaje:
+def atender_telegram():
+    """El bot real: revisa Telegram y contesta (polling)."""
+    print("🛒 Abarrotes Don Chuy abierto. Escríbele al bot en Telegram. (Ctrl + C para cerrar)")
+    siguiente = 0
+    try:
+        while True:
+            try:
+                updates = recibir_mensajes(siguiente)
+            except requests.HTTPError as e:
+                codigo = e.response.status_code
+                print(f"⚠️  Telegram respondió {codigo}. Reintento en 5 s...")
+                time.sleep(5)
                 continue
-            chat_id = mensaje["chat"]["id"]
-            nombre = mensaje["from"].get("first_name", "cliente")
-            texto = mensaje["text"]
-            print(f"📩 {nombre}: {texto}")
-
-            if texto == "/start":
-                conversaciones.pop(chat_id, None)     # /start = empezar de cero
-                pedidos_en_curso.pop(chat_id, None)
-                texto = "Hola"
-            try:
-                respuesta = responder_con_claude(chat_id, texto, nombre)
-            except Exception as e:
-                print(f"⚠️  Claude no respondió ({type(e).__name__}).")
-                respuesta = "Perdón, tuve un problemita. ¿Me lo repites en un momento?"
-            try:
-                enviar(chat_id, respuesta)
             except requests.RequestException as e:
-                print(f"⚠️  No se pudo responder ({type(e).__name__}).")
-except KeyboardInterrupt:
-    print("\n👋 Tienda cerrada.")
+                print(f"⚠️  Sin conexión con Telegram ({type(e).__name__}). Reintento en 5 s...")
+                time.sleep(5)
+                continue
+
+            for update in updates:
+                siguiente = update["update_id"] + 1
+                mensaje = update.get("message")
+                if not mensaje or "text" not in mensaje:
+                    continue
+                chat_id = mensaje["chat"]["id"]
+                nombre = mensaje["from"].get("first_name", "cliente")
+                texto = mensaje["text"]
+                print(f"📩 {nombre}: {texto}")
+
+                if texto == "/start":
+                    conversaciones.pop(chat_id, None)     # /start = empezar de cero
+                    pedidos_en_curso.pop(chat_id, None)
+                    texto = "Hola"
+                try:
+                    respuesta = responder_con_claude(chat_id, texto, nombre)
+                except Exception as e:
+                    print(f"⚠️  Claude no respondió ({type(e).__name__}).")
+                    respuesta = "Perdón, tuve un problemita. ¿Me lo repites en un momento?"
+                try:
+                    enviar(chat_id, respuesta)
+                except requests.RequestException as e:
+                    print(f"⚠️  No se pudo responder ({type(e).__name__}).")
+    except KeyboardInterrupt:
+        print("\n👋 Tienda cerrada.")
+
+
+# Solo abre la tienda si corremos "python empleado.py".
+# Si otro programa lo importa (por ejemplo examen.py), no se conecta a Telegram.
+if __name__ == "__main__":
+    atender_telegram()
