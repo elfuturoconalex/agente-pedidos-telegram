@@ -52,3 +52,43 @@ Cada sesión de trabajo queda registrada: qué hice, qué aprendí y qué proble
 ### Siguiente
 - Darle a Claude **herramientas**: un catálogo ficticio (`ver_catalogo`) para que consulte en lugar de prometer, y empezar a armar el pedido.
 
+---
+
+## Sesión 3: Herramientas, el catálogo y el primer pedido guardado (Fase 1)
+*20 de octubre de 2026*
+
+### Qué hice
+- `catalogo.json`: 20 productos ficticios con código, nombre, presentación, precio, existencia y sinónimos (el huevo y el refresco de naranja, agotados a propósito).
+- Primera **herramienta** de Claude: `buscar_producto`, que busca en el catálogo aunque el cliente escriba sin acentos o con otras palabras.
+- Puse **solo los nombres** de los productos en las instrucciones; el **precio y la existencia** se consultan siempre con la herramienta.
+- Herramientas para armar el pedido: `agregar_al_pedido`, `quitar_del_pedido`, `ver_pedido` y `confirmar_pedido`.
+- **El código hace las cuentas**, no Claude: subtotales y total salen del catálogo.
+- **Validaciones en el código:** que el producto exista, cantidad entera y positiva, que haya existencia, dirección completa y pago en efectivo o tarjeta.
+- `confirmar_pedido` guarda el pedido en `salidas/pedidos.json` (fuera de GitHub) con un **folio** (`DC-0001`).
+- Una **guardia** en el código que revisa a Claude: si dice "confirmado" sin haber guardado el pedido, se lo regresa para que lo haga bien.
+
+### Resultados
+| Prueba | Resultado |
+|---|---|
+| "¿Tienen tortillas?" | ✅ Buscó en el catálogo y dio precio real |
+| "¿Qué refrescos tienen?" (antes de la lista de nombres) | ⚠️ Inventó Coca, Sprite y Fanta |
+| "¿Tienen jugos?" | ⚠️ Inventó jugos → corregido con la lista de nombres |
+| Pedido completo (antes de la guardia) | ❌ Dijo "confirmado" pero no se guardó |
+| Pedido completo (con la guardia) | ✅ Guardado como **DC-0001**: 2 kg de tortilla + refresco de cola 2 L = $90 |
+
+### Qué aprendí
+- **Una herramienta es una función de Python** más una "ficha" que le explica a Claude para qué sirve y qué datos necesita. Claude **pide** usarla; mi código la **ejecuta** y le regresa el resultado.
+- **El bucle del agente:** Claude pide herramienta → el código la usa → Claude lee el resultado → repite hasta tener la respuesta final.
+- **Por qué JSON:** es texto ordenado que Python lee fácil; más adelante el mismo formato pasa a DynamoDB.
+- **Lo que casi no cambia va en las instrucciones; lo que cambia seguido va en una herramienta:** los nombres en el prompt, el precio y la existencia en el catálogo.
+- **El dinero y las reglas del negocio los decide el código, no el modelo.** Claude conversa; el código valida y calcula.
+- **El modelo puede decir que hizo algo que no hizo.** No basta con pedírselo en las instrucciones: hay que verificarlo en el código (la guardia).
+- Las piezas de un agente (modelo, instrucciones, herramientas, bucle, memoria, permisos, regla de parada y manejo de errores) ya están todas en `empleado.py`.
+
+### Problemas y cómo los resolví
+- **Claude inventaba productos** (Coca, Sprite, Fanta, jugos) → le di la lista de nombres del catálogo y la regla de usar la herramienta incluso para preguntas generales.
+- **Claude dijo "confirmado" sin usar `confirmar_pedido`** → regla en las instrucciones + guardia en el código. El pedido DC-0001 ya se guardó.
+- **Pendientes detectados** para el examen: a veces adivina el código del producto antes de buscarlo, y ofreció el refresco de naranja sin revisar que estaba agotada.
+
+### Siguiente
+- **Examen de conversaciones** para cerrar la Fase 1: pedido normal, producto agotado, producto que no existe, cambio de opinión, dirección incompleta y nunca "confirmado" sin guardar.
