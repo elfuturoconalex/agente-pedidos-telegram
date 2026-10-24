@@ -4,6 +4,8 @@ Agente de IA que conversa con clientes por **Telegram**, entiende pedidos escrit
 
 > El negocio es **ficticio** (Abarrotes Don Chuy), creado solo para este proyecto.
 
+> **English summary:** Telegram ordering agent for a small store. Claude chats with the customer; the code owns the catalog, prices, totals and validation, and a code guard blocks "order confirmed" unless the order was really saved. An automated conversation eval caught a double-charge bug ($84 shown, $168 saved): 8/8 after four iterations. Next: AWS with Terraform, SQS FIFO + DLQ and DynamoDB.
+
 **Ejemplo:**
 
 > Cliente: *"Quiero 2 kilos de tortilla y un refresco de 2 litros"*
