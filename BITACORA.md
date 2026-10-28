@@ -128,3 +128,44 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 
 ### Siguiente
 - **Fase 2 en AWS con Terraform:** ADR 001 (DynamoDB y sus llaves), Terraform sin llaves, base de datos y secretos.
+
+---
+
+## Sesión 5: ADR 001 (base de datos) y Terraform sin llaves (Fase 2)
+*26 y 27 de octubre de 2026*
+
+### Qué hice
+- Escribí el **[ADR 001](docs/adr/001-base-de-datos.md)**: DynamoDB en una sola tabla y el diseño de sus llaves.
+- Instalé **AWS CLI** (v2.38) y **Terraform** (v1.17) con Homebrew.
+- Activé **IAM Identity Center** (una sola región, us-east-1) y creé un usuario de trabajo, `alejandro`, con **MFA en Duo**.
+- Le di el permiso **AdministratorAccess** sobre mi cuenta, con sesiones de **8 horas**.
+- Conecté la terminal con `aws configure sso` (perfil `personal`) y probé con `aws sts get-caller-identity`: **mi Mac entra a AWS sin llaves permanentes**.
+
+### Decisiones del ADR 001
+| Decisión | Por qué |
+|---|---|
+| **DynamoDB bajo demanda** | Sin costo fijo, sin servidor, encaja con Lambda |
+| **Carpeta por `chat_id`** (no por nombre ni por pedido) | El nombre se repite y cambia; el pedido no existe hasta confirmar |
+| **Índice solo de pedidos nuevos** | "¿Qué tengo pendiente?" es abrir una sola carpeta |
+| **Libretas de ventas por semana y por mes** | "¿Cuánto llevo?" es una sola lectura; el mes no son 4 semanas exactas |
+| **Contador atómico de folios** | Nunca dos pedidos con el mismo folio |
+| **Pláticas que se borran solas (TTL 24 h)** | No se acumula basura |
+
+### Qué aprendí
+- **La Lambda tiene amnesia:** se prende, contesta y olvida. La base de datos es la nota del cambio de turno.
+- **DynamoDB es como la tabla de MACs de un switch:** buscar por llave es instantáneo; recorrer todo (Scan) es lento y caro.
+- **SQL vs. DynamoDB:** en SQL guardas y después preguntas lo que quieras (como Excel); en DynamoDB primero decides qué vas a buscar y preparas una "carpeta" para cada búsqueda (como los grupos de la agenda del celular).
+- **Los contadores que se suman** (como los de una interfaz) evitan recontar pedidos para los reportes.
+- **CloudFormation vs. Terraform:** el primero es solo de AWS (como la herramienta del fabricante); Terraform sirve para varias nubes (como Ansible) y te enseña con `plan` qué va a hacer antes de hacerlo.
+- **Llaves temporales:** en lugar de una llave permanente en la Mac, el navegador le da a la terminal una llave que caduca sola. Así entran las empresas.
+- **La cuenta principal de una organización** es como la red de administración: en una empresa no corre aplicaciones, para limitar el daño si algo falla.
+
+### Problemas y cómo los resolví
+- **AWS proponía por defecto una instancia "Multi-Region"** con llave de cifrado propia (KMS) que cobra cada mes → elegí **Single-Region**.
+- **La contraseña del usuario nuevo apareció completa en una captura** y Chrome la iba a guardar en mi cuenta del trabajo → la descarté, elegí otra y la guardé en mi llavero personal.
+- **"aws configure" pide llaves permanentes** → no lo usé; usé `aws configure sso`.
+- **El CLI ofreció conectar AWS a asistentes de IA** → dije que no por ahora (tendrían permisos de administrador).
+
+### Siguiente
+- Primer archivo de **Terraform**: crear la tabla de DynamoDB del ADR 001 y ver el primer `terraform plan`.
+- Revisar en Identity Center → Settings que no quedó la llave KMS multirregión.
