@@ -18,7 +18,6 @@ salidas/
 *.tfstate
 *.tfstate.*
 *.tfvars
-.terraform.lock.hcl
 
 # Paquetes
 paquete/
