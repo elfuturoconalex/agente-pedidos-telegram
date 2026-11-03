@@ -169,3 +169,39 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 ### Siguiente
 - Primer archivo de **Terraform**: crear la tabla de DynamoDB del ADR 001 y ver el primer `terraform plan`.
 - Revisar en Identity Center → Settings que no quedó la llave KMS multirregión.
+
+---
+
+## Sesión 6: Primera infraestructura con Terraform (Fase 2)
+*28 de octubre de 2026*
+
+### Qué hice
+- Creé la carpeta `infra/` con 5 archivos de Terraform: `versions.tf`, `providers.tf`, `variables.tf`, `dynamodb.tf` y `outputs.tf`.
+- Corrí `terraform init` (descarga el "traductor" de AWS), `terraform plan` (vista previa) y `terraform apply` (crear).
+- Creé la tabla **`pedidos-don-chuy`** tal como dice el ADR 001: PK/SK de texto, bajo demanda, índice GSI1 de pedidos nuevos, TTL en `expira`, respaldo continuo (PITR) y 3 etiquetas del proyecto.
+- Revisé en la consola que todo coincidiera con el ADR.
+- El archivo candado `.terraform.lock.hcl` ahora sí se sube a GitHub; el `terraform.tfstate` y la carpeta `.terraform` no.
+
+### Resultados
+| Paso | Resultado |
+|---|---|
+| `terraform plan` (primera vez) | ⚠️ 1 to add, con un Warning: `hash_key` obsoleto en el índice |
+| `terraform plan` (corregido) | ✅ 1 to add, sin warnings |
+| `terraform apply` | ✅ Tabla creada en 30 segundos |
+| Revisión en la consola | ✅ Todo coincide con el ADR 001 |
+
+### Qué aprendí
+- **Terraform lee todos los `.tf` de la carpeta donde estás**, por eso importa el `cd infra`.
+- **`init`** prepara las herramientas; **`plan`** compara lo que quiero (los archivos) contra lo que existe (AWS y el state) y muestra la diferencia; **`apply`** la ejecuta. Es como `show | compare` y `commit` en un Juniper.
+- **Símbolos del plan:** `+` crear, `~` cambiar, `-` borrar (este hay que leerlo con lupa).
+- **`(known after apply)`:** datos que AWS inventa al crear, como el ARN.
+- **El state es la libreta de Terraform:** anota lo que creó. No se sube a GitHub porque puede tener datos sensibles.
+- **Warm throughput (12,000 / 4,000)** es capacidad precalentada que AWS da por defecto; no cobra si no la cambio.
+- **Infraestructura como código:** si borro la tabla, `terraform apply` la vuelve a crear idéntica.
+
+### Problemas y cómo los resolví
+- **Warning "hash_key is deprecated"** en el índice → el traductor de AWS 6.x pide escribir las llaves del índice con bloques `key_schema`. Cambié solo ese bloque; el diseño no cambió.
+
+### Siguiente
+- Guardar el token de Telegram como secreto cifrado en AWS (la llave de Claude ya no hace falta: en AWS se usa Bedrock con el rol de la Lambda).
+- ADR 002: fila SQS FIFO + DLQ.
