@@ -198,6 +198,7 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 - **El state es la libreta de Terraform:** anota lo que creó. No se sube a GitHub porque puede tener datos sensibles.
 - **Warm throughput (12,000 / 4,000)** es capacidad precalentada que AWS da por defecto; no cobra si no la cambio.
 - **Infraestructura como código:** si borro la tabla, `terraform apply` la vuelve a crear idéntica.
+- **Experimento:** cambié el nombre en `variables.tf` y el plan dijo `forces replacement` y `1 to destroy`: AWS no permite renombrar una tabla, así que Terraform la borraría y crearía otra vacía. **Siempre leer el plan antes del `yes`**; en producción, `deletion_protection_enabled = true`. Regresé el nombre y el plan dijo `No changes`.
 
 ### Problemas y cómo los resolví
 - **Warning "hash_key is deprecated"** en el índice → el traductor de AWS 6.x pide escribir las llaves del índice con bloques `key_schema`. Cambié solo ese bloque; el diseño no cambió.
