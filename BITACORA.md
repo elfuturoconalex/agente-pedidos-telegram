@@ -206,3 +206,55 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 ### Siguiente
 - Guardar el token de Telegram como secreto cifrado en AWS (la llave de Claude ya no hace falta: en AWS se usa Bedrock con el rol de la Lambda).
 - ADR 002: fila SQS FIFO + DLQ.
+
+---
+
+## Sesión 7: Secreto de Telegram, ADR 002 y filas SQS (Fase 2)
+*3 y 4 de noviembre de 2026*
+
+### Qué hice
+- **Secreto:** `infra/secretos.tf` crea un parámetro cifrado (SecureString) en **Parameter Store**: `/agente-pedidos/telegram/bot-token`.
+  - Terraform lo crea con un valor de relleno y `ignore_changes`; el token real lo pegué a mano en la consola.
+  - Comprobé sin mostrar el token: versión 2, 46 caracteres e **IGUALES** al `.env`.
+  - La llave de Claude ya no hace falta: en AWS se usa Bedrock con el rol de la Lambda.
+- **[ADR 002](docs/adr/002-fila-sqs.md):** fila SQS FIFO + DLQ entre la Lambda de recepción y la del agente, con su PDF.
+- **Filas:** `infra/sqs.tf` crea la fila principal `agente-pedidos-mensajes.fifo` y la DLQ `agente-pedidos-mensajes-dlq.fifo`.
+
+### Decisiones del ADR 002
+| Decisión | Por qué |
+|---|---|
+| **Fila SQS FIFO** (no directo, no Lambda que se llama a sí misma, no fila estándar) | Orden por cliente y sin duplicados |
+| **Grupo = `chat_id`** | Cada cliente en su propia fila; clientes distintos en paralelo |
+| **Anti-duplicados = `update_id` de Telegram** | Si Telegram reintenta, se procesa una sola vez (ventana de 5 min) |
+| **Marca "ya procesado" en DynamoDB** | Protección después de los 5 minutos (idempotencia) |
+| **DLQ después de 3 intentos** | Lo que falla se aparta sin trabar a los demás |
+| **Invisibilidad de 6 minutos** | 6 veces el tiempo máximo de la Lambda (60 s), como recomienda AWS |
+
+### Resultados
+| Paso | Resultado |
+|---|---|
+| Parámetro del token (`terraform apply`) | ✅ 1 added |
+| Token pegado y comprobado | ✅ Versión 2, 46 caracteres, IGUALES |
+| Filas SQS (`terraform apply`) | ✅ 2 added (primero la DLQ, después la principal) |
+
+### Qué aprendí
+- **Un secreto es como la llave de la casa:** da acceso o poder. La dirección (número de cuenta, nombre de la tabla) no es secreta; la llave (token, contraseñas, llaves de acceso) sí.
+- **Parameter Store estándar es gratis**; Secrets Manager cobra por secreto y se justifica con rotación automática.
+- **El valor de un secreto no va en el código ni en el state:** Terraform crea el cajón, yo pongo el valor.
+- **Lo que funcionó en el Investigador aquí no sirve:** ahí cada tema era independiente; aquí la plática tiene orden.
+- **FIFO = la fila de la tortillería:** primero en llegar, primero en ser atendido.
+- **Invisibilidad = el número de turno:** mientras atienden un mensaje nadie más lo toma; si el agente falla, a los 6 minutos reaparece.
+- **Dependencias en Terraform:** la fila principal necesita la dirección (ARN) de la DLQ, así que Terraform creó primero la DLQ sin que yo le dijera el orden.
+- **`true` / `false`** en código es "sí / no", como `no shutdown` / `shutdown`.
+
+### Repaso de código (fragmentos)
+| Fragmento | Resultado | Lo que me faltaba |
+|---|---|---|
+| `dynamodb.tf` (Sesión 6) | 2.5 de 5 | PK/SK (carpeta y hoja), apodo interno vs. nombre real, protección contra borrado |
+| `sqs.tf` | 2.5 de 5 | Qué es `true`, invisibilidad (es al revés), el ARN es la dirección, no donde se guarda |
+
+### Problemas y cómo los resolví
+- **"No valid credential sources found" en Terraform** → la llave temporal de 8 horas caducó (así debe ser). `aws sso login --profile personal` y listo.
+
+### Siguiente
+- Las dos Lambdas: adaptar el código del empleado para guardar la plática, el carrito y los pedidos en DynamoDB, y usar Claude por Bedrock.
