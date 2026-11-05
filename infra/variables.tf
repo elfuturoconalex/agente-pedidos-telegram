@@ -15,3 +15,15 @@ variable "nombre_tabla" {
   type        = string
   default     = "pedidos-don-chuy"
 }
+
+variable "modelo" {
+  description = "Modelo de Claude en Bedrock (perfil de inferencia global de Haiku 4.5)"
+  type        = string
+  default     = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+}
+
+variable "modo_prueba" {
+  description = "1 = el agente NO manda mensajes a Telegram (para probar con la fila antes del webhook). 0 = producción."
+  type        = string
+  default     = "1"
+}

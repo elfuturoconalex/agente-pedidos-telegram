@@ -27,3 +27,8 @@ output "fila_dlq_arn" {
   description = "Identificador de la fila de mensajes muertos (DLQ)"
   value       = aws_sqs_queue.mensajes_dlq.arn
 }
+
+output "lambda_agente" {
+  description = "Nombre de la Lambda del agente (para ver sus logs)"
+  value       = aws_lambda_function.agente.function_name
+}
