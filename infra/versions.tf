@@ -13,5 +13,10 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.0"
     }
+    # Genera la clave secreta del webhook
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }

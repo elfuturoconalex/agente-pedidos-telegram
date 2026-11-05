@@ -32,3 +32,8 @@ output "lambda_agente" {
   description = "Nombre de la Lambda del agente (para ver sus logs)"
   value       = aws_lambda_function.agente.function_name
 }
+
+output "webhook_url" {
+  description = "Dirección del webhook que se registra en Telegram (no es secreta, pero no la publiques)"
+  value       = "${aws_apigatewayv2_api.webhook.api_endpoint}/telegram"
+}

@@ -25,5 +25,5 @@ variable "modelo" {
 variable "modo_prueba" {
   description = "1 = el agente NO manda mensajes a Telegram (para probar con la fila antes del webhook). 0 = producción."
   type        = string
-  default     = "1"
+  default     = "0" # ya con webhook: el agente contesta en Telegram de verdad
 }

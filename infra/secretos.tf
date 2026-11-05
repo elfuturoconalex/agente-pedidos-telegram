@@ -20,3 +20,20 @@ resource "aws_ssm_parameter" "telegram_token" {
     ignore_changes = [value]
   }
 }
+
+# Clave secreta del webhook: Telegram la manda en cada mensaje y la Lambda de recepción la revisa.
+# Así, aunque alguien descubra la dirección de API Gateway, no puede meter mensajes falsos.
+#
+# Esta clave la INVENTA Terraform (no viene de fuera como el token), por eso su valor sí queda en el
+# state. Es una razón más por la que el state nunca se sube a GitHub.
+resource "random_password" "webhook" {
+  length  = 48
+  special = false # Telegram solo acepta letras, números, "_" y "-"
+}
+
+resource "aws_ssm_parameter" "webhook_secret" {
+  name        = "/agente-pedidos/telegram/webhook-secret"
+  description = "Clave secreta del webhook de Telegram (la genera Terraform)."
+  type        = "SecureString"
+  value       = random_password.webhook.result
+}
