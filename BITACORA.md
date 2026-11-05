@@ -258,3 +258,58 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 
 ### Siguiente
 - Las dos Lambdas: adaptar el código del empleado para guardar la plática, el carrito y los pedidos en DynamoDB, y usar Claude por Bedrock.
+
+---
+
+## Sesión 8: El agente funciona 100% en AWS (Fase 2)
+*4 de noviembre de 2026*
+
+### Qué hice
+- **El empleado se mudó a una Lambda** (`lambdas/agente/app.py`): mismo `empleado.py`, pero la plática y el carrito se leen y guardan en **DynamoDB**, los pedidos usan **folio atómico + transacción**, cada mensaje se marca como "ya procesado" y Claude se usa por **Bedrock** (sin llave de Anthropic). Sin librerías externas.
+- **Prueba local** (`lambdas/agente/probar_local.py`): el mismo código desde mi Mac contra la tabla real y Claude real; Telegram simulado.
+- **Lambda del agente con Terraform** (`infra/lambda_agente.tf`): el paquete .zip, el rol con 5 permisos mínimos, logs de 14 días, la Lambda (arm64, 60 s) y su conexión con la fila (1 mensaje por vuelta, máximo 5 a la vez).
+- **La puerta de entrada** (`infra/lambda_recepcion.tf` y `lambdas/recepcion/app.py`): API Gateway (`POST /telegram`, freno de 10 por segundo), una **clave secreta del webhook** generada por Terraform y una Lambda de recepción que solo revisa la clave y mete el mensaje a la fila.
+- **Registré el webhook en Telegram** tomando el token y la clave directo de AWS (nunca aparecieron en pantalla).
+- **Le escribí al bot desde mi celular** y el pedido **DC-0004** se guardó, atendido 100% desde AWS.
+
+### Resultados
+| Prueba | Resultado |
+|---|---|
+| Prueba local, intento 1 | ❌ "total" es palabra reservada de DynamoDB |
+| Prueba local, intento 2 | ❌ Datos "traducidos" dos veces (MAP) |
+| Prueba local, intento 3 | ✅ DC-0003 guardado y DUPLICADO_IGNORADO |
+| Mensaje falso a la fila (modo prueba) | ✅ La Lambda en AWS contestó y escribió su TRAZA |
+| Tocar la puerta sin clave | ✅ `{"ok": false}` y CLAVE_INCORRECTA en el log |
+| Registrar el webhook | ✅ "Webhook was set" |
+| Pedido real desde mi celular | ✅ DC-0004, $48, **la GUARDIA lo salvó** |
+
+### Números reales
+| Dato | Valor |
+|---|---|
+| Costo de un pedido completo (6 mensajes) | ~3 centavos de dólar |
+| Recepción → "ok" a Telegram | 9 a 250 ms |
+| Respuesta del agente | 1.5 a 4 segundos |
+| Memoria usada | 100 de 256 MB (agente), 94 de 128 MB (recepción) |
+
+### Qué aprendí
+- **La guardia sí importa en producción:** Claude dijo "confirmado" sin guardar; la guardia se lo regresó y el pedido se guardó. Para el cliente fue invisible.
+- **La transacción "todo o nada" funciona:** dos intentos fallaron y no quedó ni un pedido a medias.
+- **Huecos en los folios son normales:** el contador suma antes de la transacción; si ésta falla, se salta un número. Lo importante es que nunca se repita.
+- **La marca "ya procesado" va al final:** así un mensaje que falla nunca se da por atendido.
+- **Palabras reservadas:** DynamoDB no acepta ciertos nombres sueltos (como `total`); se usan alias (`#total`).
+- **Arranque en frío:** la primera vez la Lambda tarda ~0.5 s más en "despertar"; AWS también cobra ese arranque.
+- **Probar en capas:** primero en local, luego con un mensaje falso a la fila, luego la puerta sin clave y al final desde el celular. Cada capa aísla un problema.
+- **Con el webhook, `empleado.py` ya no funciona en la Mac:** Telegram deja de usar el buzón (polling) y toca el timbre en AWS.
+
+### Repaso de código
+| Fragmento | Resultado | Lo que me faltaba |
+|---|---|---|
+| `lambdas/recepcion/app.py` | 3.5 de 6 | Códigos HTTP (200 = recibido, 401 = no autorizado); con una foto se contesta 200 para que Telegram no la reintente; el anti-duplicados tira el repetido, no lo actualiza. ✅ Pregunta de entrevista: sin la clave, cualquiera mete mensajes falsos (defensa en capas) |
+
+### Para la Fase 3
+- Aceptó "Calle bellavista #2" sin colonia: la validación de dirección debe ser más estricta.
+- Dio el precio por kilo sin consultar la herramienta (lo calculó bien, pero la regla dice consultar).
+
+### Siguiente
+- ADR 003: avisarle a Don Chuy cuando entra un pedido y que pueda consultar sus pedidos nuevos y sus ventas.
+- Examen de conversaciones corriendo en AWS, revisión de costos, diagrama y README.
