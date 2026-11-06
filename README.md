@@ -29,6 +29,7 @@ Agente de IA que conversa con clientes por **Telegram**, entiende pedidos escrit
 - **Modelado de datos:** qué base de datos elegir y cómo diseñar sus llaves, documentado en el [ADR 001](docs/adr/001-base-de-datos.md).
 - **Integración:** webhook seguro de Telegram, secretos cifrados y, opcionalmente, eventos para otros sistemas.
 - **Mensajes que no se pierden:** una fila **SQS FIFO** entre la recepción y el agente mantiene el orden de cada conversación, reintenta si algo falla, ignora duplicados y manda a una fila de mensajes muertos (DLQ) lo que falla varias veces ([ADR 002](docs/adr/002-fila-sqs.md)).
+- **Reaccionar a lo que se guarda:** cuando se crea un pedido, **DynamoDB Streams** despierta una Lambda que le avisa al dueño por Telegram, sin tocar al agente; el dueño consulta pendientes y ventas con comandos fijos, sin IA ([ADR 003](docs/adr/003-aviso-al-dueno.md)).
 - **Infraestructura como código** con Terraform.
 
 ## Examen de conversaciones (Fase 1)
