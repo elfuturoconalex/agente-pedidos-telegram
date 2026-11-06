@@ -13,6 +13,10 @@ data "archive_file" "agente" {
     filename = "app.py"
   }
   source {
+    content  = file("${path.module}/../lambdas/agente/dueno.py") # comandos de Don Chuy (ADR 003)
+    filename = "dueno.py"
+  }
+  source {
     content  = file("${path.module}/../catalogo.json") # un solo catálogo para todo el proyecto
     filename = "catalogo.json"
   }
@@ -54,10 +58,16 @@ resource "aws_iam_role_policy" "agente" {
         Resource = aws_dynamodb_table.pedidos.arn
       },
       {
-        Sid      = "LeerSoloElTokenDeTelegram"
+        Sid      = "ConsultarPedidosPendientes"
+        Effect   = "Allow"
+        Action   = "dynamodb:Query"
+        Resource = "${aws_dynamodb_table.pedidos.arn}/index/GSI1" # solo el índice, no la tabla completa
+      },
+      {
+        Sid      = "LeerElTokenYElChatDelDueno"
         Effect   = "Allow"
         Action   = "ssm:GetParameter"
-        Resource = aws_ssm_parameter.telegram_token.arn
+        Resource = [aws_ssm_parameter.telegram_token.arn, aws_ssm_parameter.dueno_chat_id.arn]
       },
       {
         Sid    = "UsarSoloClaudeHaiku"
@@ -101,6 +111,7 @@ resource "aws_lambda_function" "agente" {
     variables = {
       TABLA           = aws_dynamodb_table.pedidos.name
       PARAMETRO_TOKEN = aws_ssm_parameter.telegram_token.name
+      PARAMETRO_DUENO = aws_ssm_parameter.dueno_chat_id.name
       MODELO          = var.modelo
       MODO_PRUEBA     = var.modo_prueba
     }

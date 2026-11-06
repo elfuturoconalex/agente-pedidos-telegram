@@ -23,9 +23,12 @@ from decimal import Decimal
 
 import boto3
 
+import dueno   # comandos de Don Chuy, sin IA (ADR 003)
+
 # ---------- Configuración (variables de entorno que pone Terraform) ----------
 TABLA = os.environ.get("TABLA", "pedidos-don-chuy")
 PARAMETRO_TOKEN = os.environ.get("PARAMETRO_TOKEN", "/agente-pedidos/telegram/bot-token")
+PARAMETRO_DUENO = os.environ.get("PARAMETRO_DUENO", "/agente-pedidos/dueno/chat-id")
 MODELO = os.environ.get("MODELO", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
 MODO_PRUEBA = os.environ.get("MODO_PRUEBA") == "1"   # 1 = no manda nada a Telegram (pruebas locales)
 REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -43,6 +46,7 @@ tabla = dynamo.Table(TABLA)
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
 ssm = boto3.client("ssm", region_name=REGION)
 _token_cache = None
+_dueno_cache = None
 
 # ---------- Catálogo (archivo que viaja con la Lambda) ----------
 _aqui = os.path.dirname(os.path.abspath(__file__))
@@ -328,6 +332,14 @@ def token_telegram():
     return _token_cache
 
 
+def chat_del_dueno():
+    """El chat_id de Don Chuy (Parameter Store), leído una vez por Lambda tibia."""
+    global _dueno_cache
+    if _dueno_cache is None:
+        _dueno_cache = ssm.get_parameter(Name=PARAMETRO_DUENO)["Parameter"]["Value"]
+    return _dueno_cache
+
+
 def enviar_telegram(chat_id, texto):
     if MODO_PRUEBA:
         print(f"   🤖 (prueba, no se envía) {texto}")
@@ -359,6 +371,19 @@ def procesar(mensaje):
     if tabla.get_item(Key={"PK": f"MENSAJE#{update_id}", "SK": "PROCESADO"}).get("Item"):
         print(json.dumps({"evento": "DUPLICADO_IGNORADO", "update_id": update_id}))
         return
+
+    # ¿Es Don Chuy con un comando? Se contesta con datos exactos de la tabla, sin IA (ADR 003).
+    # Si no es el dueño, el mensaje sigue al agente como cualquier otro.
+    comando = dueno.comando_de(texto)
+    if comando in dueno.COMANDOS and str(chat_id) == chat_del_dueno():
+        inicio = time.time()
+        respuesta = dueno.atender(tabla, texto, datetime.now(HORA_MEXICO), CATALOGO_POR_ID)
+        enviar_telegram(chat_id, respuesta)
+        tabla.put_item(Item={"PK": f"MENSAJE#{update_id}", "SK": "PROCESADO",
+                             "expira": int(time.time()) + HORAS_PLATICA * 3600})
+        print(json.dumps({"evento": "COMANDO_DUENO", "comando": comando, "update_id": update_id,
+                          "segundos": round(time.time() - inicio, 2)}))
+        return respuesta
 
     # Leer la nota del cambio de turno: la plática y el carrito de este cliente.
     item = tabla.get_item(Key={"PK": f"CLIENTE#{chat_id}", "SK": "PLATICA"}).get("Item") or {}

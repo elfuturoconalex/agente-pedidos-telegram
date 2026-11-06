@@ -46,7 +46,7 @@ def texto_aviso(p):
     renglones += ["", f"Total: {pesos(p['total'])}",
                   f"Dirección: {p['direccion']}",
                   f"Pago: {p['forma_pago']}",
-                  "", f"Cuando lo entregues: /entregado {p['folio']}"]
+                  "", "Cuando lo entregues, toca: /entregado_" + p["folio"].replace("-", "")]
     return "\n".join(renglones)
 
 
