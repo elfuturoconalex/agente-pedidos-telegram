@@ -313,3 +313,57 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 ### Siguiente
 - ADR 003: avisarle a Don Chuy cuando entra un pedido y que pueda consultar sus pedidos nuevos y sus ventas.
 - Examen de conversaciones corriendo en AWS, revisión de costos, diagrama y README.
+
+## Sesión 9: Don Chuy se entera de cada pedido (Fase 2)
+*5 de noviembre de 2026*
+
+### Qué hice
+- **ADR 003** (`docs/adr/003-aviso-al-dueno.md`): cómo se entera Don Chuy de los pedidos. Comparé 4 opciones (directo desde el agente, EventBridge, DynamoDB Streams, correo/SMS) y elegí **DynamoDB Streams + una Lambda avisadora**. Las consultas del dueño van con **comandos fijos, sin IA**.
+- **El "papel carbón" de la tabla** (`infra/dynamodb.tf`): encendí el Stream. Fue un cambio en sitio (`~`), sin reemplazar la tabla ni tocar los datos.
+- **La avisadora** (`infra/lambda_avisador.tf` y `lambdas/avisador/app.py`): un **filtro** hace que solo despierte cuando se **crea** un pedido. Pone una palomita de "avisado" (para no avisar dos veces) y le manda el pedido a Don Chuy. Si falla 3 veces, deja nota en una **fila de avisos fallidos**.
+- **El `chat_id` del dueño** quedó en Parameter Store. Lo saqué del pedido DC-0004 con un comando, sin escribirlo a mano.
+- **Diagnóstico del "me trabé"**: la traza ahora guarda **por qué terminó Claude** cada vuelta (`paradas`), y si Claude escribe mal una herramienta tiene **un reintento** antes de contestar al cliente.
+- **Comandos de Don Chuy** (`lambdas/agente/dueno.py`): `/pendientes`, `/ventas` y `/entregado_DC0005`. El agente los atiende **antes** de llamar a Claude, solo si vienen del `chat_id` del dueño. Permiso nuevo: consultar **solo el índice** de pendientes.
+
+### Resultados
+| Prueba | Resultado |
+|---|---|
+| `terraform apply` del Stream y la avisadora | ✅ 7 creados, 1 cambiado (la tabla, en sitio), 0 destruidos |
+| Pedido real DC-0005 desde mi celular | ✅ Confirmación al cliente y **aviso a Don Chuy en el mismo minuto** |
+| Logs de la avisadora | ✅ `AVISO_ENVIADO` en 1.25 s |
+| Primer mensaje del pedido | ⚠️ "Perdón, me trabé tantito": Claude terminó sin texto ni herramienta |
+| `/pendientes` | ✅ 3 pedidos, del más viejo al más nuevo |
+| `/ventas` | ✅ $178 en 3 pedidos ($90 + $48 + $40: **cuadra exacto**) |
+| `/entregado_DC0003` (un toque) | ✅ Marcado y fuera de la lista |
+
+### Números reales
+| Dato | Valor |
+|---|---|
+| Pedido completo (8 mensajes) | ~US$0.039 (unos 70 centavos de peso) |
+| Mensaje con herramientas vs. pura plática | ~US$0.010 vs. ~US$0.003 |
+| Avisadora | 1.25 s (incluye 0.56 s de arranque en frío), 98 de 128 MB |
+| Leer el Stream desde Lambda | Sin costo; los registros filtrados no despiertan la Lambda |
+
+### Qué aprendí
+- **DynamoDB Streams = puerto espejo (SPAN):** cada cambio guardado se copia a una salida aparte; quien escucha ahí no toca el tráfico principal.
+- **El problema de la doble escritura:** si el agente guarda el pedido y *luego* publica un aviso (EventBridge), puede salir bien lo primero y fallar lo segundo. Con el Stream, el aviso nace del pedido ya guardado.
+- **"Al menos una vez":** el Stream puede entregar la misma copia dos veces; por eso la **palomita condicional** ("solo si no tiene palomita").
+- **Un bot es como un firewall stateful:** no puede iniciar la conversación; Don Chuy le escribe una vez (paso de instalación) y desde ahí el bot le puede avisar.
+- **Sin IA para el dinero:** los comandos leen la libreta tal cual; contestan en milisegundos y no gastan en Bedrock.
+- **Telegram solo vuelve "tocable" un comando sin espacios ni guiones:** por eso `/entregado_DC0005` y no `/entregado DC-0005`.
+- **Observabilidad:** la traza decía *que* falló, pero no *por qué* (un ping sin código de error). Ahora guarda el motivo de cada vuelta.
+- **Defensa en capas para el aviso:** si se perdiera, el pedido sigue en `/pendientes`. "El aviso es la campanita; la lista es la libreta."
+
+### Repaso de código
+| Fragmento | Resultado | Lo que me faltaba |
+|---|---|---|
+| `lambdas/agente/dueno.py` (`/entregado`) | 0.75 de 4 | `next(...)` = hojear la lista y quedarse con el primero que cumple (o "nada"); `/pendientes` solo pregunta por la carpeta `ESTADO#nuevo` del índice (como una VLAN: cambias el puerto de VLAN y deja de verse ahí); la condición evita marcarlo dos veces y que se reescriba la hora de entrega. ✅ Entrevista: el código lee los números exactos de DynamoDB (faltó decir: el dinero debe ser exacto, y así es más barato y rápido) |
+
+### Para la Fase 3
+- **La GUARDIA volvió a actuar** al confirmar DC-0005: hay que reforzar la instrucción de usar `confirmar_pedido` antes de decir "confirmado".
+- **Vigilar las `paradas`** en la traza para confirmar si el "me trabé" fue una herramienta mal escrita (`malformed_tool_use`).
+
+### Siguiente
+- Alarmas: aviso si algo cae en la DLQ de mensajes o en la fila de avisos fallidos.
+- Examen de conversaciones en AWS y revisión de costos.
+- Diagrama, README y cierre de la Fase 2.
