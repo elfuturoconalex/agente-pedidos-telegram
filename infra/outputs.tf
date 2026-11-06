@@ -37,3 +37,13 @@ output "webhook_url" {
   description = "Dirección del webhook que se registra en Telegram (no es secreta, pero no la publiques)"
   value       = "${aws_apigatewayv2_api.webhook.api_endpoint}/telegram"
 }
+
+output "lambda_avisador" {
+  description = "Nombre de la Lambda avisadora (para ver sus logs)"
+  value       = aws_lambda_function.avisador.function_name
+}
+
+output "parametro_dueno" {
+  description = "Nombre del parámetro donde va el chat_id de Don Chuy"
+  value       = aws_ssm_parameter.dueno_chat_id.name
+}

@@ -49,6 +49,12 @@ resource "aws_dynamodb_table" "pedidos" {
     }
   }
 
+  # "Papel carbón" (ADR 003): cada cambio que se guarda queda copiado en un Stream.
+  # La Lambda avisadora lo lee para avisarle a Don Chuy de los pedidos nuevos.
+  # NEW_IMAGE = la copia lleva el registro tal como quedó guardado.
+  stream_enabled   = true
+  stream_view_type = "NEW_IMAGE"
+
   # Borrado automático: los ítems con el atributo "expira" (las pláticas) se borran solos.
   ttl {
     attribute_name = "expira"

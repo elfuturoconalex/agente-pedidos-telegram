@@ -265,8 +265,8 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito):
         mensajes.pop(0)
 
     turno = [{"role": m["role"], "content": [{"text": m["content"]}]} for m in mensajes]
-    traza = {"herramientas": [], "tokens_entrada": 0, "tokens_salida": 0}
-    pedido_guardado = aviso_dado = False
+    traza = {"herramientas": [], "tokens_entrada": 0, "tokens_salida": 0, "paradas": []}
+    pedido_guardado = aviso_dado = reintento_dado = False
 
     for _ in range(8):                                    # máximo 8 vueltas, por seguridad
         r = bedrock.converse(modelId=MODELO, system=[{"text": instrucciones(carrito)}], messages=turno,
@@ -274,6 +274,14 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito):
         traza["tokens_entrada"] += r["usage"]["inputTokens"]
         traza["tokens_salida"] += r["usage"]["outputTokens"]
         salida = r["output"]["message"]
+        traza["paradas"].append(r["stopReason"])   # por qué terminó Claude cada vuelta (para diagnosticar)
+
+        # Claude intentó usar una herramienta pero la "escribió mal": se le da UNA oportunidad más,
+        # en lugar de contestarle al cliente "me trabé".
+        if r["stopReason"] in ("malformed_tool_use", "malformed_model_output") and not reintento_dado:
+            reintento_dado = True
+            traza["herramientas"].append("REINTENTO")
+            continue
 
         if r["stopReason"] != "tool_use":
             texto_final = "".join(b.get("text", "") for b in salida["content"])

@@ -37,3 +37,17 @@ resource "aws_ssm_parameter" "webhook_secret" {
   type        = "SecureString"
   value       = random_password.webhook.result
 }
+
+# El chat_id de Don Chuy: a dónde manda sus avisos la Lambda avisadora (ADR 003).
+# No es secreto (por eso es "String", no "SecureString"), pero tampoco va en GitHub:
+# se pone a mano después de que Don Chuy le escribe al bot por primera vez.
+resource "aws_ssm_parameter" "dueno_chat_id" {
+  name        = "/agente-pedidos/dueno/chat-id"
+  description = "chat_id de Telegram del dueno. Se pone a mano; no esta en el codigo ni en GitHub."
+  type        = "String"
+  value       = "CAMBIAR-EN-LA-CONSOLA"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
