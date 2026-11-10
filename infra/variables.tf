@@ -27,3 +27,8 @@ variable "modo_prueba" {
   type        = string
   default     = "0" # ya con webhook: el agente contesta en Telegram de verdad
 }
+
+variable "correo_alertas" {
+  description = "Correo que recibe las alarmas. Va en terraform.tfvars, que no se sube a GitHub."
+  type        = string
+}
