@@ -35,5 +35,5 @@ Con **1,000 pedidos al mes**: ~20–50 USD en Claude más centavos de lo demás.
 | Fase | Sesiones estimadas | Sesiones reales | Costo real |
 |---|---|---|---|
 | 1 | 5 | 4 | ~1 USD (pruebas y 4 exámenes) |
-| 2 | 7.5 | | |
+| 2 | 7.5 | 6 | ~US$1–2 (estimado con las trazas; confirmar en Billing) |
 | 3 | 4 | | |

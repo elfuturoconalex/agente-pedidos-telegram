@@ -1,36 +1,74 @@
-# Agente de Pedidos por Telegram 🤖🛒
+# Agente de Pedidos por Telegram
 
-Agente de IA que conversa con clientes por **Telegram**, entiende pedidos escritos en lenguaje natural, **pregunta lo que falta**, confirma y guarda el pedido como **datos estructurados y validados** en una base de datos.
+Agente de IA que conversa con clientes por **Telegram**, entiende pedidos escritos en lenguaje natural, **pregunta lo que falta**, confirma y guarda el pedido como **datos estructurados y validados**. El dueño recibe un **aviso de cada pedido** y consulta sus pendientes y ventas desde el mismo Telegram.
 
 > El negocio es **ficticio** (Abarrotes Don Chuy), creado solo para este proyecto.
 
-> **English summary:** Telegram ordering agent for a small store. Claude chats with the customer; the code owns the catalog, prices, totals and validation, and a code guard blocks "order confirmed" unless the order was really saved. An automated conversation eval caught a double-charge bug ($84 shown, $168 saved): 8/8 after four iterations. Next: AWS with Terraform, SQS FIFO + DLQ and DynamoDB.
+> **English summary:** Telegram ordering agent for a small store, running on AWS and built 100% with Terraform: API Gateway webhook (secret-token check) → receiver Lambda → SQS FIFO + DLQ → agent Lambda (Claude Haiku 4.5 on Bedrock with tools) → DynamoDB single-table design (atomic order numbers, all-or-nothing transactions, sales ledgers, sparse GSI for pending orders). DynamoDB Streams wakes a notifier Lambda that alerts the owner; owner commands return exact figures from the table without the LLM. CloudWatch alarms on both failure queues email via SNS. Least-privilege IAM per Lambda, no keys. Conversation eval run against the real Lambda in an isolated test mode: 8/8, ~US$0.02 per confirmed order, 1.9 s per message. Design decisions in 3 ADRs.
 
 **Ejemplo:**
 
 > Cliente: *"Quiero 2 kilos de tortilla y un refresco de 2 litros"*
 > Agente: *"¿A qué dirección te lo llevo y cómo vas a pagar?"*
-> … y al confirmar, se guarda un pedido con productos, cantidades, dirección y forma de pago.
+> … y al confirmar, se guarda el pedido con su folio y a Don Chuy le llega el aviso.
 
 ## Fases del proyecto
 
 - [x] **Fase 1:** Loop del agente y la conversación, todo en mi Mac (examen 8/8)
-- [ ] **Fase 2:** En AWS con **Terraform**: webhook de Telegram, Lambdas, fila **SQS FIFO** con DLQ, base de datos y secretos (con ADRs de las decisiones)
-- [ ] **Fase 3:** Salida estructurada validada con esquema, corrección automática, errores claros y examen de conversaciones
+- [x] **Fase 2:** En AWS con **Terraform**: webhook de Telegram, Lambdas, fila **SQS FIFO** con DLQ, DynamoDB, secretos, aviso al dueño y alarmas (3 ADRs, examen en AWS 8/8)
+- [ ] **Fase 3:** Salida estructurada validada con esquema, reglas más estrictas (dirección, consulta de precios) y examen de 20–30 conversaciones
 
-## Arquitectura (preliminar)
+## Arquitectura en AWS
 
-![Arquitectura preliminar del agente de pedidos](docs/arquitectura-preliminar.png)
+![Arquitectura en AWS del agente de pedidos](docs/arquitectura-aws.png)
+
+1. El cliente escribe en Telegram, y Telegram avisa por **webhook** a **API Gateway**.
+2. La **Lambda de recepción** revisa la clave secreta del webhook, mete el mensaje a la **fila SQS FIFO** y responde en milisegundos.
+3. La **Lambda del agente** toma los mensajes en orden: Claude decide qué herramienta usar y el código lleva catálogo, precios, totales y validación. Lee y guarda la plática y el pedido en **DynamoDB**, y contesta por Telegram.
+4. Cuando se crea un pedido, el **Stream** de DynamoDB despierta a la **Lambda avisadora**, que le avisa a Don Chuy.
+5. Si un mensaje o un aviso falla 3 veces, cae en su fila de fallas y una **alarma de CloudWatch** manda un correo por **SNS**.
+
+*El diagrama preliminar del inicio del proyecto sigue en [docs/arquitectura-preliminar.png](docs/arquitectura-preliminar.png), para comparar lo planeado con lo construido.*
+
+## Decisiones de arquitectura (ADRs)
+
+| ADR | Decisión | Por qué |
+|---|---|---|
+| [001](docs/adr/001-base-de-datos.md) | **DynamoDB**, tabla única con llaves PK/SK | Sin servidor, se paga por uso; folio atómico y transacciones "todo o nada" |
+| [002](docs/adr/002-fila-sqs.md) | **SQS FIFO + DLQ** entre la recepción y el agente | Ningún mensaje perdido, ninguno duplicado y cada plática en orden |
+| [003](docs/adr/003-aviso-al-dueno.md) | **DynamoDB Streams** + Lambda avisadora; comandos del dueño **sin IA** | El aviso nace del pedido ya guardado; los números de dinero salen exactos de la tabla |
 
 ## Qué demuestra este proyecto
 
-- **Salida estructurada (structured output):** el agente no devuelve texto suelto, sino datos con una forma exacta.
-- **Validación con esquema:** qué pasa cuando los datos están mal, cómo se corrigen y cómo se reporta el error.
-- **Modelado de datos:** qué base de datos elegir y cómo diseñar sus llaves, documentado en el [ADR 001](docs/adr/001-base-de-datos.md).
-- **Integración:** webhook seguro de Telegram, secretos cifrados y, opcionalmente, eventos para otros sistemas.
-- **Mensajes que no se pierden:** una fila **SQS FIFO** entre la recepción y el agente mantiene el orden de cada conversación, reintenta si algo falla, ignora duplicados y manda a una fila de mensajes muertos (DLQ) lo que falla varias veces ([ADR 002](docs/adr/002-fila-sqs.md)).
-- **Reaccionar a lo que se guarda:** cuando se crea un pedido, **DynamoDB Streams** despierta una Lambda que le avisa al dueño por Telegram, sin tocar al agente; el dueño consulta pendientes y ventas con comandos fijos, sin IA ([ADR 003](docs/adr/003-aviso-al-dueno.md)).
-- **Infraestructura como código** con Terraform.
+- **Agente con herramientas:** Claude decide qué buscar, qué agregar y cuándo confirmar; el código es dueño de los precios y los totales.
+- **Guardia en código:** si Claude dice "confirmado" sin haber guardado el pedido, el código lo detiene. Actuó en los dos pedidos reales de prueba.
+- **Arquitectura asíncrona y desacoplada:** la recepción contesta al instante y el trabajo pesado va por una fila; el aviso al dueño reacciona a lo que se guarda, sin tocar al agente.
+- **Idempotencia:** marca de "ya procesado" por mensaje, "agregar deja en N", palomita condicional de "avisado" y "entregado" que no se marca dos veces.
+- **Modelado de datos:** tabla única, índice disperso de pendientes, libretas de ventas por semana y mes con contadores atómicos.
+- **Seguridad:** clave secreta en el webhook, secretos cifrados en Parameter Store (el token nunca pasa por Terraform), un rol de IAM con mínimo privilegio por Lambda y sin llaves.
+- **Observabilidad:** cada mensaje deja una TRAZA (herramientas, tokens, costo, motivo de parada, tiempo), sin textos del cliente; alarmas en las filas de fallas, probadas de punta a punta.
+- **Infraestructura como código:** todo con Terraform (31 recursos), incluido el examen en AWS.
+
+## Números reales (Fase 2)
+
+| Dato | Valor |
+|---|---|
+| Examen de conversaciones en AWS | **8/8** |
+| Costo por pedido confirmado | ~US$0.02 (examen) a ~US$0.04 (pedido real de 8 mensajes) |
+| Respuesta del agente | 1.9 s por mensaje en promedio |
+| Recepción → "ok" a Telegram | 9 a 250 ms |
+| Aviso a Don Chuy | ~1.3 s después de guardar el pedido |
+| Infraestructura fija | Sin costo fijo: todo se paga por uso |
+
+## Examen de conversaciones en AWS (Fase 2)
+
+`examen_aws.py` corre los mismos 8 casos de la Fase 1 contra el **agente real**: invoca la Lambda directo con la etiqueta `"prueba": true`, así que usa Claude en Bedrock y DynamoDB de verdad, pero sin Telegram ni la fila.
+
+El **modo prueba** está aislado, como una VLAN de pruebas dentro de producción: los pedidos llevan folio `PR-`, van a su propia libreta de ventas, no salen en `/pendientes` y no se le avisan al dueño. Desde Telegram no se puede activar: la recepción arma el mensaje solo con 4 campos fijos.
+
+**Resultado: 8/8**, con un costo total de US$0.10 por las 22 respuestas.
+
+**Lección:** el examen revisa *datos* (pedido, total, folio), no *cómo* llegó ahí. Al leer las pláticas encontré que el agente dice qué hay y qué no hay **sin consultar la herramienta**, porque esa lista ya va en sus instrucciones. No mintió, pero las instrucciones se contradicen; se corrige en la Fase 3.
 
 ## Examen de conversaciones (Fase 1)
 
@@ -44,6 +82,27 @@ Agente de IA que conversa con clientes por **Telegram**, entiende pedidos escrit
 | 4 | **8/8** | — | — |
 
 **Lección principal:** la memoria guarda lo que el modelo *dijo*, no lo que *hizo*. Lo importante (el pedido, las existencias) lo lleva el código y se le muestra al modelo en cada mensaje; las reglas escritas solas no bastan.
+
+## Cómo desplegarlo
+
+Requisitos: cuenta de AWS con acceso por **IAM Identity Center** (sin llaves), Terraform y un bot de Telegram creado con @BotFather.
+
+```bash
+aws sso login --profile personal
+cd infra
+echo 'correo_alertas = "<TU-CORREO>"' > terraform.tfvars   # no se sube a GitHub
+terraform init
+terraform apply
+```
+
+Después del primer `apply`:
+
+1. Pegar el token del bot en Parameter Store (`/agente-pedidos/telegram/bot-token`) desde la consola de AWS. Terraform solo crea el cajón con un valor de relleno, para que el token nunca quede en el código ni en el state.
+2. Confirmar el correo de alertas (llega de AWS Notifications).
+3. Registrar el webhook en Telegram con la dirección de API Gateway (`<MI-API>`) y la clave secreta que generó Terraform.
+4. El dueño le escribe al bot una vez y su `chat_id` se guarda en `/agente-pedidos/dueno/chat-id`.
+
+Examen en AWS, desde la raíz del repo: `python examen_aws.py`.
 
 ## Proyectos anteriores
 

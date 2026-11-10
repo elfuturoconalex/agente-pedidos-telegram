@@ -367,3 +367,55 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 - Alarmas: aviso si algo cae en la DLQ de mensajes o en la fila de avisos fallidos.
 - Examen de conversaciones en AWS y revisión de costos.
 - Diagrama, README y cierre de la Fase 2.
+
+## Sesión 10: Alarmas, examen en AWS y cierre de la Fase 2
+*9 de noviembre de 2026*
+
+### Qué hice
+- **Alarmas** (`infra/alarmas.tf`): una alarma de CloudWatch por cada fila de fallas (la DLQ de mensajes y la de avisos fallidos). Si llega 1 mensaje, **SNS** me manda un correo, y otro cuando vuelve a la normalidad. Usé `for_each`: una receta, dos alarmas.
+- **Mi correo fuera de GitHub:** va en `terraform.tfvars`, que Git ignora.
+- **Probé las alarmas de punta a punta:** metí un mensaje falso a la fila de avisos fallidos → correo ALARM → vacié la fila → correo OK.
+- **Modo prueba aislado** en el agente: con `"prueba": true` (solo invocando la Lambda directo) el pedido se guarda de verdad, pero con folio `PR-`, en su propia libreta de ventas, fuera de `/pendientes` y sin aviso a Don Chuy.
+- **Examen en AWS** (`examen_aws.py`): los 8 casos de la Fase 1 contra la Lambda real, con costo y tiempo de cada caso.
+- **Cierre de la Fase 2:** diagrama final (`docs/arquitectura-aws.png`), README nuevo (sin emojis en el título), tabla de ADRs, números reales, cómo desplegarlo y estimado vs. real.
+
+### Resultados
+| Prueba | Resultado |
+|---|---|
+| `terraform apply` de las alarmas | ✅ 4 creados (tema SNS, suscripción, 2 alarmas) |
+| Mensaje de prueba a la fila de avisos fallidos | ✅ Correo ALARM en ~6 minutos |
+| Vaciar la fila | ✅ Correo OK ~8 minutos después |
+| Primer intento del examen | ❌ "Telegram respondió 400": faltaba el `terraform apply` del código nuevo |
+| Examen en AWS | ✅ **8/8** en 47 segundos |
+
+### Números reales
+| Dato | Valor |
+|---|---|
+| Examen completo (22 mensajes) | US$0.0965 |
+| Pedido confirmado (3–4 mensajes) | ~US$0.02 |
+| Respuesta promedio | 1.9 s por mensaje |
+| Guardia, reintento o "me trabé" en el examen | 0 |
+| Recursos creados con Terraform | 31 |
+| Fase 2: sesiones estimadas vs. reales | 7.5 vs. 6 |
+
+### Qué aprendí
+- **Alarma = SNMP trap:** CloudWatch vigila la fila y SNS reparte el aviso. Sin alarma, una DLQ es un syslog que nadie lee.
+- **Probar la alarma, no solo crearla:** hasta que no llega el correo, no sé si funciona (y el primero cayó en la carpeta equivocada).
+- **El correo de alertas debe confirmarse:** sin el clic en "Confirm subscription", SNS no manda nada.
+- **Datos personales fuera del código:** `terraform.tfvars` ignorado por Git; aun así, el valor queda en el state.
+- **Modo prueba aislado = VLAN de pruebas:** el mismo camino real, pero con sus propios folios y ventas, y sin poder activarse desde Telegram.
+- **Aprobar el examen no es todo:** el examen revisa datos; al leer las pláticas vi que el agente responde existencias sin consultar la herramienta, porque la lista ya va en sus instrucciones. Las instrucciones se contradicen.
+- **Si el código no cambia en AWS, no cambia nada:** editar el archivo no basta; hay que hacer `terraform apply`.
+
+### Repaso de código
+| Fragmento | Resultado | Lo que me faltaba |
+|---|---|---|
+| `infra/alarmas.tf` (la alarma) | Pendiente | |
+
+### Para la Fase 3
+- Decidir: existencias desde la lista de las instrucciones y precio con la herramienta, o quitar la lista y obligar a consultar.
+- Dirección más estricta (calle, número y colonia) y reforzar `confirmar_pedido` antes de decir "confirmado".
+- Examen de 20–30 conversaciones, incluidas trampas.
+
+### Siguiente
+- **Fase 3**: salida estructurada y validación con esquema, reglas más estrictas y examen grande.
