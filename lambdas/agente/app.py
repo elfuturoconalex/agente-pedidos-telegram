@@ -159,8 +159,12 @@ def quitar_del_pedido(carrito, id_producto):
     return {"ok": True, "pedido": resumen_carrito(carrito)}
 
 
-def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago):
-    """Valida y guarda el pedido en DynamoDB (ADR 001): folio atómico + una transacción todo-o-nada."""
+def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago, prueba=False):
+    """Valida y guarda el pedido en DynamoDB (ADR 001): folio atómico + una transacción todo-o-nada.
+
+    prueba=True (solo el examen, invocando la Lambda directo): el pedido se guarda igual, pero con
+    folio PR-xxxx, en su propia libreta de ventas y fuera de /pendientes. Así el examen prueba el
+    camino real sin ensuciar las ventas ni los folios de Don Chuy (como una VLAN de pruebas)."""
     resumen = resumen_carrito(carrito)
     errores = []
     if not resumen["productos"]:
@@ -173,9 +177,10 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago):
         return {"error": " ".join(errores)}
 
     # 1. Folio: DynamoDB suma 1 de forma atómica; nunca entrega el mismo número a dos pedidos.
-    r = tabla.update_item(Key={"PK": "CONTADOR", "SK": "FOLIO"}, UpdateExpression="ADD ultimo :uno",
+    r = tabla.update_item(Key={"PK": "CONTADOR", "SK": "FOLIO-PRUEBA" if prueba else "FOLIO"},
+                          UpdateExpression="ADD ultimo :uno",
                           ExpressionAttributeValues={":uno": 1}, ReturnValues="UPDATED_NEW")
-    folio = f"DC-{int(r['Attributes']['ultimo']):04d}"
+    folio = f"{'PR' if prueba else 'DC'}-{int(r['Attributes']['ultimo']):04d}"
 
     # 2. Fechas en hora de México: semana ISO (lunes a domingo) y mes.
     ahora = datetime.now(HORA_MEXICO)
@@ -189,8 +194,11 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago):
         "folio": folio, "fecha": fecha, "chat_id": str(chat_id), "cliente": nombre_cliente,
         "productos": resumen["productos"], "total": resumen["total"],
         "direccion": direccion.strip(), "forma_pago": forma_pago, "estado": "nuevo",
-        "GSI1PK": "ESTADO#nuevo", "GSI1SK": f"{fecha}#{folio}",   # aparece en la lista de pedidos nuevos
+        "GSI1PK": "ESTADO#prueba" if prueba else "ESTADO#nuevo",  # los nuevos aparecen en /pendientes
+        "GSI1SK": f"{fecha}#{folio}",
     }
+    if prueba:
+        pedido["prueba"] = True   # la avisadora lo ignora
 
     # 3. Libretas de ventas: se SUMA el total, el número de pedidos y cada producto (como contadores de interfaz).
     # Ojo: "total" es palabra reservada de DynamoDB; por eso todos los nombres van con alias (#...).
@@ -201,7 +209,7 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago):
     suma = "ADD #total :total, #pedidos :uno, " + ", ".join(f"#p{i} :c{i}" for i in range(len(resumen["productos"])))
 
     def libreta(sk):
-        return {"Update": {"TableName": TABLA, "Key": {"PK": "VENTAS", "SK": sk},
+        return {"Update": {"TableName": TABLA, "Key": {"PK": "VENTAS-PRUEBA" if prueba else "VENTAS", "SK": sk},
                            "UpdateExpression": suma, "ExpressionAttributeNames": nombres,
                            "ExpressionAttributeValues": valores}}
 
@@ -219,7 +227,7 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago):
     return {"ok": True, "folio": folio, "total": resumen["total"]}
 
 
-def usar_herramienta(nombre, entrada, chat_id, carrito, nombre_cliente):
+def usar_herramienta(nombre, entrada, chat_id, carrito, nombre_cliente, prueba=False):
     if nombre == "buscar_producto":
         return buscar_producto(entrada.get("texto", ""))
     if nombre == "agregar_al_pedido":
@@ -230,7 +238,7 @@ def usar_herramienta(nombre, entrada, chat_id, carrito, nombre_cliente):
         return resumen_carrito(carrito)
     if nombre == "confirmar_pedido":
         return confirmar_pedido(chat_id, carrito, nombre_cliente,
-                                entrada.get("direccion", ""), entrada.get("forma_pago", ""))
+                                entrada.get("direccion", ""), entrada.get("forma_pago", ""), prueba)
     return {"error": f"No existe la herramienta {nombre}"}
 
 
@@ -261,7 +269,7 @@ HERRAMIENTAS = {"tools": [
 
 
 # ---------- El bucle del agente (Claude por Bedrock) ----------
-def responder(chat_id, texto, nombre_cliente, mensajes, carrito):
+def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False):
     """Igual que en la Fase 1: Claude puede usar herramientas varias veces antes de contestar."""
     mensajes.append({"role": "user", "content": texto})
     del mensajes[:-MAX_MENSAJES]
@@ -306,7 +314,10 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito):
         for b in salida["content"]:
             if "toolUse" in b:
                 uso = b["toolUse"]
-                resultado = usar_herramienta(uso["name"], uso.get("input", {}), chat_id, carrito, nombre_cliente)
+                resultado = usar_herramienta(uso["name"], uso.get("input", {}), chat_id, carrito, nombre_cliente, prueba)
+                if prueba:   # el examen necesita ver qué pidió Claude y qué le contestó el código
+                    traza.setdefault("detalle", []).append({"herramienta": uso["name"], "entrada": uso.get("input", {}),
+                                                            "resultado": resultado})
                 hubo_error = "error" in resultado
                 if uso["name"] == "confirmar_pedido" and resultado.get("ok"):
                     pedido_guardado = True
@@ -366,6 +377,9 @@ def procesar(mensaje):
     chat_id = mensaje["chat_id"]
     nombre = mensaje.get("nombre", "cliente")
     texto = mensaje.get("texto", "")
+    # Modo examen: solo llega invocando la Lambda directo (con permiso de IAM). La recepción arma
+    # el mensaje con 4 campos fijos, así que desde Telegram nadie puede activarlo.
+    prueba = mensaje.get("prueba") is True
 
     # ¿Ya se atendió? (ADR 002: la fila evita duplicados solo 5 minutos)
     if tabla.get_item(Key={"PK": f"MENSAJE#{update_id}", "SK": "PROCESADO"}).get("Item"):
@@ -394,8 +408,9 @@ def procesar(mensaje):
         mensajes, carrito, texto = [], {}, "Hola"
 
     inicio = time.time()
-    respuesta, traza = responder(chat_id, texto, nombre, mensajes, carrito)
-    enviar_telegram(chat_id, respuesta)
+    respuesta, traza = responder(chat_id, texto, nombre, mensajes, carrito, prueba)
+    if not prueba:
+        enviar_telegram(chat_id, respuesta)
 
     # Anotar lo nuevo para el siguiente mensaje (se borra solo a las 24 h).
     expira = int(time.time()) + HORAS_PLATICA * 3600
@@ -406,12 +421,18 @@ def procesar(mensaje):
 
     # TRAZA para CloudWatch: sin textos del cliente ni datos personales.
     traza.update({"evento": "TRAZA", "update_id": update_id, "segundos": round(time.time() - inicio, 2)})
-    print(json.dumps(traza, ensure_ascii=False))
+    detalle = traza.pop("detalle", [])          # el detalle (con datos del cliente) no va a los logs
+    if prueba:
+        traza["prueba"] = True
+    print(json.dumps(traza, ensure_ascii=False, default=str))
+    if prueba:
+        return {"respuesta": respuesta, "traza": traza, "detalle": detalle}
     return respuesta
 
 
 def handler(event, context):
     """Punto de entrada: SQS entrega un mensaje a la vez. Si algo falla, la excepción hace
-    que el mensaje regrese a la fila y se reintente; después de 3 fallos se va a la DLQ."""
-    for record in event["Records"]:
-        procesar(json.loads(record["body"]))
+    que el mensaje regrese a la fila y se reintente; después de 3 fallos se va a la DLQ.
+    Lo que regresa solo lo usa el examen (SQS lo ignora)."""
+    resultados = [procesar(json.loads(record["body"])) for record in event["Records"]]
+    return json.loads(json.dumps(resultados, default=str))   # Decimal -> texto, para poder regresarlo

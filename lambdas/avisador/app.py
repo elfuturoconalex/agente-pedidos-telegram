@@ -63,6 +63,9 @@ def enviar_telegram(chat_id, texto):
 
 
 def avisar(pedido):
+    if pedido.get("prueba"):   # pedidos del examen: no se le avisan a Don Chuy
+        print(json.dumps({"evento": "PRUEBA_IGNORADA", "folio": pedido["folio"]}))
+        return
     llave = {"PK": pedido["PK"], "SK": pedido["SK"]}
 
     # 1. Palomita de "avisado", solo si no la tiene (el papel carbón puede entregar la misma copia dos veces).
