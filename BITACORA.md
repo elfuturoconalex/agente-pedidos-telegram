@@ -410,7 +410,7 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 ### Repaso de código
 | Fragmento | Resultado | Lo que me faltaba |
 |---|---|---|
-| `infra/alarmas.tf` (la alarma) | Pendiente | |
+| `infra/alarmas.tf` (la alarma) | 1.75 de 4 | `for_each` crea **una alarma por cada fila de la lista: 2**; suena cuando, en una ventana de 5 minutos, el máximo de mensajes esperando en la fila llega a 1 o más; `ok_actions` manda el correo de "ya se resolvió" (sin él, no sabría si el problema sigue). ✅ Entrevista: vigilar lo que importa (pedidos que no se procesaron), no cada error; faltó decir que los errores pasajeros ya se reintentan solos y alarmar cada uno sería puro ruido |
 
 ### Para la Fase 3
 - Decidir: existencias desde la lista de las instrucciones y precio con la herramienta, o quitar la lista y obligar a consultar.
