@@ -17,6 +17,7 @@ Resultados en salidas/ (no se sube a GitHub).
 import csv
 import json
 import os
+import re
 import time
 import unicodedata
 
@@ -92,6 +93,20 @@ CASOS = [
 ]
 
 
+def precios_de(valor, encontrados):
+    """Junta todos los precios que regresaron las herramientas (precio, subtotal, total...)."""
+    if isinstance(valor, dict):
+        for k, v in valor.items():
+            if k in ("precio", "precio_unitario", "subtotal", "total") and isinstance(v, (int, float)):
+                encontrados.add(float(v))
+            else:
+                precios_de(v, encontrados)
+    elif isinstance(valor, list):
+        for v in valor:
+            precios_de(v, encontrados)
+    return encontrados
+
+
 def hablar(chat_id, numero, texto):
     """Un mensaje del cliente falso -> la Lambda real, como si viniera de la fila."""
     mensaje = {"update_id": f"examen-{chat_id}-{numero}", "chat_id": chat_id,
@@ -113,12 +128,18 @@ print(f"Examen en AWS: {len(CASOS)} casos contra la Lambda {FUNCION}\n")
 for n, caso in enumerate(CASOS, 1):
     chat_id = int(f"9{corrida}{n:02d}")
     respuestas, trazas, llamadas = [], [], []
+    precios_conocidos, precios_inventados = set(), []
     log.append(f"===== Caso {n}: {caso['nombre']} =====")
     for i, texto in enumerate(caso["mensajes"], 1):
         r = hablar(chat_id, i, texto)
         respuestas.append(r["respuesta"])
         trazas.append(r["traza"])
         llamadas += r["detalle"]
+        # 6. ¿Dio un precio que ninguna herramienta le dio? (la regla: precios solo con herramientas)
+        precios_de([c["resultado"] for c in r["detalle"]], precios_conocidos)
+        for m in re.findall(r"\$\s?(\d+(?:\.\d+)?)", r["respuesta"]):
+            if float(m) not in precios_conocidos:
+                precios_inventados.append(f"${m}")
         log += [f"Cliente: {texto}", f"Agente:  {r['respuesta']}",
                 f"         herramientas={r['traza']['herramientas']} paradas={r['traza'].get('paradas')}", ""]
 
@@ -166,6 +187,9 @@ for n, caso in enumerate(CASOS, 1):
     # 5. ¿Dio un folio sin haber guardado?
     if not pedidos and any("DC-" in r or "PR-" in r for r in respuestas):
         fallas.append("dio un folio falso")
+
+    if precios_inventados:
+        fallas.append(f"dio precios sin herramienta: {', '.join(precios_inventados)}")
 
     # Números del caso (de la TRAZA de cada mensaje)
     costo = sum(t["costo_usd"] for t in trazas)
