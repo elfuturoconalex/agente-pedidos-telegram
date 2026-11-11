@@ -14,6 +14,7 @@ es solo este archivo y el catálogo.
 """
 import json
 import os
+import re
 import time
 import unicodedata
 import urllib.error
@@ -87,10 +88,19 @@ Cómo se toma un pedido:
   Los ids están entre paréntesis en la lista de productos: copia el id exacto, nunca lo inventes.
 - Nunca calcules precios ni totales tú: usa los que regresan las herramientas.
 - Antes de cerrar, pide la dirección de entrega y la forma de pago (efectivo o tarjeta).
-- Lee el resumen al cliente (productos, cantidades, total, dirección y pago) y pregúntale
-  si está correcto. Usa confirmar_pedido SOLO después de que diga que sí.
-- El pedido solo existe si confirmar_pedido regresa un folio. Nunca digas que el pedido
-  está confirmado sin haberla usado, y al confirmar dale al cliente su folio.
+  La dirección necesita CALLE, NÚMERO y COLONIA. Usa solo lo que dijo el cliente: si falta
+  una parte, pregúntala; nunca la inventes ni la completes tú.
+- Cuando ya tengas productos, dirección y forma de pago, usa preparar_pedido de inmediato
+  (no preguntes "¿algo más?" en ese momento). Te regresa el resumen exacto: léeselo al cliente
+  tal cual y pregúntale si está correcto.
+- Usa confirmar_pedido SOLO cuando el cliente apruebe ese resumen. Cualquier aprobación cuenta:
+  "sí", "sale", "va", "ok", "mándalo", "está bien", "órale", o un 👍 (escrito, en sticker o como
+  reacción). Si cambia algo, ajusta el pedido y vuelve a usar preparar_pedido. Si su respuesta
+  no queda clara, pregúntale de nuevo si se lo mandas así; nunca lo confirmes con la duda.
+- Si llega algo entre corchetes, como [el cliente mandó una nota de voz] o [una foto], es algo
+  que no puedes ver ni escuchar: pídele amablemente que te lo escriba.
+- El pedido solo existe si confirmar_pedido regresa un folio. Primero usa la herramienta y
+  después escribe: nunca digas que quedó confirmado ni des un folio antes de usarla.
 - Si una herramienta regresa un error, explícaselo al cliente con tus palabras."""
 
 
@@ -98,6 +108,30 @@ def normal(texto):
     """Minúsculas y sin acentos, para que 'Azúcar' y 'azucar' sean lo mismo."""
     texto = unicodedata.normalize("NFD", texto.lower())
     return "".join(c for c in texto if unicodedata.category(c) != "Mn")
+
+
+# Respuestas que no son una dirección de verdad.
+DIRECCIONES_VAGAS = {"casa", "mi casa", "aqui", "alla", "aca", "donde siempre", "ya sabes", "la de siempre",
+                     "mi domicilio", "domicilio", "mi trabajo", "trabajo", "la misma", "igual", "no se"}
+
+
+def validar_direccion(direccion):
+    """El esquema de la dirección: calle, número y colonia por separado (referencias opcional).
+    Regresa (errores, texto_bonito). Si hay errores, el pedido NO se guarda y Claude pregunta lo que falta."""
+    if not isinstance(direccion, dict):
+        return ["La dirección debe venir por partes: calle, número y colonia."], ""
+    partes = {k: str(direccion.get(k) or "").strip() for k in ("calle", "numero", "colonia", "referencias")}
+    calle, numero, referencias = partes["calle"], partes["numero"], partes["referencias"]
+    colonia = re.sub(r"^(col\.?|colonia)\s+", "", partes["colonia"], flags=re.IGNORECASE)   # sin "Col. Col."
+    errores = []
+    if len(calle) < 3 or normal(calle) in DIRECCIONES_VAGAS:
+        errores.append("Falta la calle (el nombre real de la calle).")
+    if not re.search(r"\d", numero) and normal(numero).replace(" ", "") not in ("s/n", "sn", "sinnumero"):
+        errores.append("Falta el número exterior (o 'S/N' si no tiene).")
+    if len(colonia) < 3 or normal(colonia) in DIRECCIONES_VAGAS:
+        errores.append("Falta la colonia.")
+    texto = f"{calle} {numero}, Col. {colonia}" + (f" ({referencias})" if referencias else "")
+    return errores, texto
 
 
 def resumen_carrito(carrito):
@@ -160,7 +194,47 @@ def quitar_del_pedido(carrito, id_producto):
     return {"ok": True, "pedido": resumen_carrito(carrito)}
 
 
-def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago, prueba=False):
+def preparar_pedido(carrito, direccion, forma_pago, estado):
+    """Paso 1 de 2, como un 'show | compare' antes del 'commit': valida todo y arma el resumen EXACTO
+    que Claude le lee al cliente. Todavía no guarda nada; queda "por confirmar"."""
+    resumen = resumen_carrito(carrito)
+    errores = [] if resumen["productos"] else ["El pedido está vacío."]
+    errores_dir, direccion_texto = validar_direccion(direccion)
+    errores += errores_dir
+    if forma_pago not in FORMAS_DE_PAGO:
+        errores.append(f"La forma de pago debe ser una de: {', '.join(FORMAS_DE_PAGO)}.")
+    if errores:
+        return {"error": " ".join(errores) + " Pregúntale al cliente lo que falta; no lo inventes."}
+    estado["por_confirmar"] = {
+        "direccion": {k: str(direccion.get(k) or "").strip() for k in ("calle", "numero", "colonia", "referencias")},
+        "forma_pago": forma_pago, "carrito": dict(carrito), "mensaje": estado["update_id"]}
+    renglones = "; ".join(f"{r['cantidad']} x {r['producto']}: ${r['subtotal']}" for r in resumen["productos"])
+    return {"ok": True, "pedido": resumen,
+            "resumen_para_el_cliente": f"{renglones}. Total: ${resumen['total']}. Entrega en {direccion_texto}. "
+                                       f"Pago: {forma_pago}. ¿Te lo mando así? Solo me falta tu visto bueno "
+                                       f"para enviarlo.",
+            "siguiente_paso": "Léele este resumen tal cual, incluida la pregunta final, y espera su respuesta. "
+                              "Si lo aprueba (sí, sale, va, ok, mándalo, 👍...), usa confirmar_pedido."}
+
+
+def confirmar_pedido(chat_id, carrito, nombre_cliente, estado, prueba=False):
+    """Paso 2 de 2 (el 'commit'): solo guarda lo que el cliente YA VIO en el resumen y aprobó en un
+    mensaje posterior. El código lo exige; no depende de que Claude siga la regla."""
+    pc = estado.get("por_confirmar")
+    if not pc:
+        return {"error": "Primero usa preparar_pedido y léele el resumen al cliente."}
+    if pc["mensaje"] == estado["update_id"]:
+        return {"error": "El cliente todavía no ha visto el resumen. Léeselo y espera a que diga que sí."}
+    if pc["carrito"] != carrito:
+        estado["por_confirmar"] = None
+        return {"error": "El pedido cambió desde el resumen. Usa preparar_pedido otra vez y léele el resumen nuevo."}
+    resultado = _guardar_pedido(chat_id, carrito, nombre_cliente, pc["direccion"], pc["forma_pago"], prueba)
+    if resultado.get("ok"):
+        estado["por_confirmar"] = None
+    return resultado
+
+
+def _guardar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago, prueba=False):
     """Valida y guarda el pedido en DynamoDB (ADR 001): folio atómico + una transacción todo-o-nada.
 
     prueba=True (solo el examen, invocando la Lambda directo): el pedido se guarda igual, pero con
@@ -170,12 +244,12 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago, pr
     errores = []
     if not resumen["productos"]:
         errores.append("El pedido está vacío.")
-    if not direccion or len(direccion.strip()) < 8:
-        errores.append("Falta una dirección de entrega completa (calle, número y colonia).")
+    errores_dir, direccion_texto = validar_direccion(direccion)
+    errores += errores_dir
     if forma_pago not in FORMAS_DE_PAGO:
         errores.append(f"La forma de pago debe ser una de: {', '.join(FORMAS_DE_PAGO)}.")
-    if errores:
-        return {"error": " ".join(errores)}
+    if errores:   # error claro: Claude le pregunta al cliente justo lo que falta
+        return {"error": " ".join(errores) + " Pregúntale al cliente lo que falta; no lo inventes."}
 
     # 1. Folio: DynamoDB suma 1 de forma atómica; nunca entrega el mismo número a dos pedidos.
     r = tabla.update_item(Key={"PK": "CONTADOR", "SK": "FOLIO-PRUEBA" if prueba else "FOLIO"},
@@ -194,7 +268,10 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago, pr
         "PK": f"CLIENTE#{chat_id}", "SK": f"PEDIDO#{folio}",
         "folio": folio, "fecha": fecha, "chat_id": str(chat_id), "cliente": nombre_cliente,
         "productos": resumen["productos"], "total": resumen["total"],
-        "direccion": direccion.strip(), "forma_pago": forma_pago, "estado": "nuevo",
+        "direccion": direccion_texto,                     # texto listo para el aviso y /pendientes
+        "direccion_detalle": {k: str(direccion.get(k) or "").strip()
+                              for k in ("calle", "numero", "colonia", "referencias")},
+        "forma_pago": forma_pago, "estado": "nuevo",
         "GSI1PK": "ESTADO#prueba" if prueba else "ESTADO#nuevo",  # los nuevos aparecen en /pendientes
         "GSI1SK": f"{fecha}#{folio}",
     }
@@ -228,7 +305,8 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, direccion, forma_pago, pr
     return {"ok": True, "folio": folio, "total": resumen["total"]}
 
 
-def usar_herramienta(nombre, entrada, chat_id, carrito, nombre_cliente, prueba=False):
+def usar_herramienta(nombre, entrada, chat_id, carrito, nombre_cliente, prueba=False, estado=None):
+    estado = estado if estado is not None else {"update_id": "", "por_confirmar": None}
     if nombre == "buscar_producto":
         return buscar_producto(entrada.get("texto", ""))
     if nombre == "agregar_al_pedido":
@@ -237,9 +315,10 @@ def usar_herramienta(nombre, entrada, chat_id, carrito, nombre_cliente, prueba=F
         return quitar_del_pedido(carrito, entrada.get("id_producto"))
     if nombre == "ver_pedido":
         return resumen_carrito(carrito)
+    if nombre == "preparar_pedido":
+        return preparar_pedido(carrito, entrada.get("direccion"), entrada.get("forma_pago", ""), estado)
     if nombre == "confirmar_pedido":
-        return confirmar_pedido(chat_id, carrito, nombre_cliente,
-                                entrada.get("direccion", ""), entrada.get("forma_pago", ""), prueba)
+        return confirmar_pedido(chat_id, carrito, nombre_cliente, estado, prueba)
     return {"error": f"No existe la herramienta {nombre}"}
 
 
@@ -252,8 +331,8 @@ def _ficha(nombre, descripcion, propiedades, requeridos=()):
 
 HERRAMIENTAS = {"tools": [
     _ficha("buscar_producto", "Busca en el catálogo de Abarrotes Don Chuy. Devuelve los productos que coinciden, "
-           "con id, presentación, precio en pesos y existencia (0 = agotado). Úsala siempre antes de dar precios "
-           "o confirmar si hay algo.",
+           "con id, presentación, precio en pesos y existencia (0 = agotado). Úsala antes de dar un precio "
+           "(para saber si hay algo, bastan las listas de DISPONIBLES y AGOTADOS).",
            {"texto": {"type": "string", "description": "Lo que busca el cliente, ej. 'tortillas'"}}, ["texto"]),
     _ficha("agregar_al_pedido", "Pone un producto en el pedido con la cantidad TOTAL que quiere el cliente "
            "(si ya estaba, la reemplaza; no suma). Regresa el pedido con subtotales y total.",
@@ -263,14 +342,24 @@ HERRAMIENTAS = {"tools": [
     _ficha("quitar_del_pedido", "Quita un producto del pedido del cliente.",
            {"id_producto": {"type": "string"}}, ["id_producto"]),
     _ficha("ver_pedido", "Muestra cómo va el pedido del cliente: productos, cantidades, subtotales y total.", {}),
-    _ficha("confirmar_pedido", "Guarda el pedido. Úsala SOLO después de leerle el resumen al cliente y que diga que sí.",
-           {"direccion": {"type": "string", "description": "Calle, número y colonia"},
+    _ficha("preparar_pedido", "Valida el pedido (productos, dirección y forma de pago) y regresa el resumen exacto "
+           "para leérselo al cliente. Todavía NO lo guarda.",
+           {"direccion": {"type": "object",
+                          "description": "La dirección POR PARTES, tal como la dijo el cliente. No inventes partes.",
+                          "properties": {
+                              "calle": {"type": "string", "description": "Nombre de la calle"},
+                              "numero": {"type": "string", "description": "Número exterior (e interior si hay), o 'S/N'"},
+                              "colonia": {"type": "string", "description": "Colonia"},
+                              "referencias": {"type": "string", "description": "Opcional: entre calles, color de casa"}},
+                          "required": ["calle", "numero", "colonia"]},
             "forma_pago": {"type": "string", "enum": FORMAS_DE_PAGO}}, ["direccion", "forma_pago"]),
+    _ficha("confirmar_pedido", "Guarda el pedido que ya preparaste. Úsala SOLO cuando el cliente responda que sí "
+           "al resumen de preparar_pedido. No lleva datos: usa lo que el cliente ya aprobó.", {}),
 ]}
 
 
 # ---------- El bucle del agente (Claude por Bedrock) ----------
-def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False):
+def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, estado=None):
     """Igual que en la Fase 1: Claude puede usar herramientas varias veces antes de contestar."""
     mensajes.append({"role": "user", "content": texto})
     del mensajes[:-MAX_MENSAJES]
@@ -279,7 +368,7 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False):
 
     turno = [{"role": m["role"], "content": [{"text": m["content"]}]} for m in mensajes]
     traza = {"herramientas": [], "tokens_entrada": 0, "tokens_salida": 0, "paradas": []}
-    pedido_guardado = aviso_dado = reintento_dado = False
+    pedido_guardado = aviso_dado = reintento_dado = vacio_reintentado = False
 
     for _ in range(8):                                    # máximo 8 vueltas, por seguridad
         r = bedrock.converse(modelId=MODELO, system=[{"text": instrucciones(carrito)}], messages=turno,
@@ -298,15 +387,25 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False):
 
         if r["stopReason"] != "tool_use":
             texto_final = "".join(b.get("text", "") for b in salida["content"])
-            # GUARDIA: ¿dice "confirmado" sin haber guardado el pedido de verdad?
-            if "confirmad" in normal(texto_final) and not pedido_guardado and carrito and not aviso_dado:
+            # Claude terminó SIN decir nada (la causa real del "me trabé"): se le pide el texto UNA vez.
+            if not texto_final.strip() and not vacio_reintentado:
+                vacio_reintentado = True
+                traza["herramientas"].append("SIN_TEXTO")
+                turno[-1]["content"].append({"text": "[Aviso del sistema, no del cliente] Ahora contéstale al "
+                                                     "cliente con un mensaje de texto breve."})
+                continue
+            # GUARDIA: ¿dice que ya quedó (confirmado o con folio) sin haber guardado el pedido de verdad?
+            t = normal(texto_final)
+            dice_que_quedo = "?" not in t and (re.search(r"\bconfirmad[oa]\b", t) or re.search(r"\bfolio\b", t))
+            if dice_que_quedo and not pedido_guardado and carrito and not aviso_dado:
                 aviso_dado = True
                 traza["herramientas"].append("GUARDIA")
                 turno.append(salida)
                 turno.append({"role": "user", "content": [{"text": "[Aviso del sistema, no del cliente] Dijiste que "
-                              "el pedido está confirmado, pero NO usaste confirmar_pedido y el pedido NO se guardó. "
-                              "Si el cliente ya dijo que sí, usa confirmar_pedido ahora con su dirección y forma de "
-                              "pago; si no, pregúntale."}]})
+                              "el pedido quedó, pero NO usaste confirmar_pedido y el pedido NO se guardó. "
+                              "Si el cliente ya dijo que sí al resumen, usa confirmar_pedido; si no, usa "
+                              "preparar_pedido o pregúntale lo que falta. Contéstale al cliente sin mencionar "
+                              "este aviso."}]})
                 continue
             break
 
@@ -315,7 +414,8 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False):
         for b in salida["content"]:
             if "toolUse" in b:
                 uso = b["toolUse"]
-                resultado = usar_herramienta(uso["name"], uso.get("input", {}), chat_id, carrito, nombre_cliente, prueba)
+                resultado = usar_herramienta(uso["name"], uso.get("input", {}), chat_id, carrito, nombre_cliente,
+                                             prueba, estado)
                 if prueba:   # el examen necesita ver qué pidió Claude y qué le contestó el código
                     traza.setdefault("detalle", []).append({"herramienta": uso["name"], "entrada": uso.get("input", {}),
                                                             "resultado": resultado})
@@ -404,19 +504,25 @@ def procesar(mensaje):
     item = tabla.get_item(Key={"PK": f"CLIENTE#{chat_id}", "SK": "PLATICA"}).get("Item") or {}
     mensajes = item.get("mensajes", [])
     carrito = {k: _a_entero(v) for k, v in item.get("carrito", {}).items()}
+    por_confirmar = item.get("por_confirmar")           # el resumen que el cliente ya vio (paso 1 de 2)
+    if por_confirmar:
+        por_confirmar["carrito"] = {k: _a_entero(v) for k, v in por_confirmar["carrito"].items()}
 
     if texto == "/start":                                 # /start = empezar de cero
-        mensajes, carrito, texto = [], {}, "Hola"
+        mensajes, carrito, texto, por_confirmar = [], {}, "Hola", None
+    estado = {"update_id": update_id, "por_confirmar": por_confirmar}
 
     inicio = time.time()
-    respuesta, traza = responder(chat_id, texto, nombre, mensajes, carrito, prueba)
+    respuesta, traza = responder(chat_id, texto, nombre, mensajes, carrito, prueba, estado)
     if not prueba:
         enviar_telegram(chat_id, respuesta)
 
     # Anotar lo nuevo para el siguiente mensaje (se borra solo a las 24 h).
     expira = int(time.time()) + HORAS_PLATICA * 3600
-    tabla.put_item(Item={"PK": f"CLIENTE#{chat_id}", "SK": "PLATICA",
-                         "mensajes": mensajes, "carrito": carrito, "expira": expira})
+    platica = {"PK": f"CLIENTE#{chat_id}", "SK": "PLATICA", "mensajes": mensajes, "carrito": carrito, "expira": expira}
+    if estado["por_confirmar"]:
+        platica["por_confirmar"] = estado["por_confirmar"]
+    tabla.put_item(Item=platica)
     # Marca "ya procesado" (también se borra sola a las 24 h).
     tabla.put_item(Item={"PK": f"MENSAJE#{update_id}", "SK": "PROCESADO", "expira": expira})
 

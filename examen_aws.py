@@ -1,7 +1,7 @@
 """
 Examen de conversaciones EN AWS (Fase 2).
 
-Los mismos 8 casos de la Fase 1 (examen_conversaciones.py), pero contra el agente REAL:
+Los 8 casos de la Fase 1 (examen_conversaciones.py) más los de la Fase 3, contra el agente REAL:
 la Lambda en AWS, Claude en Bedrock y DynamoDB. Solo se saltan Telegram y la fila:
 el examen invoca la Lambda directo con "prueba": true.
 
@@ -44,7 +44,7 @@ def normal(texto):
 
 DIRECCION = "Calle Roble 12, Colonia Centro"
 
-# Los mismos casos de la Fase 1.
+# Los casos de la Fase 1 (y abajo, los nuevos de la Fase 3).
 CASOS = [
     {"nombre": "Pedido normal",
      "mensajes": ["Qué onda, quiero 2 kilos de tortilla de maíz y un refresco de cola de 2 litros",
@@ -90,6 +90,50 @@ CASOS = [
                   f"Mándalo a {DIRECCION}, pago con transferencia",
                   "Sí, confírmalo"],
      "debe_guardar": False},
+
+    # Fase 3: la dirección ahora tiene esquema (calle, número y colonia)
+    {"nombre": "Dirección sin colonia",
+     "mensajes": ["Quiero 1 kilo de tortilla de maíz",
+                  "Mándalo a Calle Bellavista #2, pago en efectivo",
+                  "Sí, confírmalo"],
+     "debe_guardar": False},
+
+    {"nombre": "Dirección completa con referencias",
+     "mensajes": ["Quiero un garrafón de agua",
+                  "Es en Avenida Juárez 45 interior 3, colonia Del Carmen, entre Hidalgo y Morelos. Pago con tarjeta",
+                  "Sí, confírmalo",
+                  "Sí, todo bien"],   # con la confirmación en 2 pasos, el "sí" va DESPUÉS de ver el resumen
+     "debe_guardar": True, "productos": {"AGUA-GARR": 1}, "total": 45, "colonia": "carmen"},
+
+    # Fase 3: la gente aprueba como habla (y a veces sin texto). Los corchetes son lo que la
+    # recepción traduce cuando llega un sticker, una reacción o una nota de voz.
+    {"nombre": "Aprueba con 'sale'",
+     "mensajes": ["Quiero 2 kilos de tortilla de maíz",
+                  "Calle Roble 12, Colonia Centro, pago en efectivo",
+                  "sale"],
+     "debe_guardar": True, "productos": {"TOR-MAIZ": 2}, "total": 48},
+
+    {"nombre": "Aprueba con 👍 escrito",
+     "mensajes": ["Quiero 1 garrafón de agua",
+                  "Calle Pino 8, Colonia Las Flores, pago con tarjeta",
+                  "👍"],
+     "debe_guardar": True, "productos": {"AGUA-GARR": 1}, "total": 45},
+
+    {"nombre": "Aprueba con reacción 👍",
+     "mensajes": ["Quiero 1 kilo de frijol",
+                  "Calle Roble 12, Colonia Centro, pago en efectivo",
+                  "[el cliente reaccionó 👍 a tu último mensaje]"],
+     "debe_guardar": True, "productos": {"FRIJOL": 1}, "total": 36},
+
+    {"nombre": "Sticker que no se entiende",
+     "mensajes": ["Quiero 1 kilo de arroz",
+                  "Calle Roble 12, Colonia Centro, pago en efectivo",
+                  "[el cliente mandó un sticker 🐱]"],
+     "debe_guardar": False, "ultima_pregunta": True},
+
+    {"nombre": "Nota de voz",
+     "mensajes": ["[el cliente mandó una nota de voz]"],
+     "debe_guardar": False, "ultima_contiene": "escrib"},
 ]
 
 
@@ -165,6 +209,8 @@ for n, caso in enumerate(CASOS, 1):
             fallas.append("no le dio el folio al cliente")
         if not p.get("prueba"):
             fallas.append("el pedido no quedó marcado como prueba")
+        if caso.get("colonia") and caso["colonia"] not in normal(p.get("direccion_detalle", {}).get("colonia", "")):
+            fallas.append(f"colonia guardada: '{p.get('direccion_detalle', {}).get('colonia')}'")
 
     # 3. ¿Agregó un producto agotado?
     for c in llamadas:
@@ -183,6 +229,12 @@ for n, caso in enumerate(CASOS, 1):
         for palabra in caso.get("no_ofrecer", []):
             if palabra in normal(r):
                 fallas.append(f"ofreció '{palabra}' (agotado)")
+
+    # 4c. Respuestas que debe dar: volver a preguntar, o pedir que lo escriba.
+    if caso.get("ultima_pregunta") and "?" not in respuestas[-1] and "dime" not in normal(respuestas[-1]):
+        fallas.append("no volvió a preguntar")
+    if caso.get("ultima_contiene") and caso["ultima_contiene"] not in normal(respuestas[-1]):
+        fallas.append(f"no dijo '{caso['ultima_contiene']}…'")
 
     # 5. ¿Dio un folio sin haber guardado?
     if not pedidos and any("DC-" in r or "PR-" in r for r in respuestas):
