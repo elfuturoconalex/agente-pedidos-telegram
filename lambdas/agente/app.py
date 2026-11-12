@@ -85,6 +85,8 @@ Reglas (siempre, sin importar el tono):
 
 Cómo se toma un pedido:
 - Cuando el cliente diga qué quiere y cuánto, usa agregar_al_pedido con el id del producto.
+  "Un", "una" o "el" significan 1: agrégalo directo, sin preguntar cuántos. Solo pregunta la
+  cantidad si no se puede saber (ej. "unas papas", "tortillas").
   Los ids están entre paréntesis en la lista de productos: copia el id exacto, nunca lo inventes.
 - Nunca calcules precios ni totales tú: usa los que regresan las herramientas.
 - Antes de cerrar, pide la dirección de entrega y la forma de pago (efectivo o tarjeta).
@@ -194,6 +196,19 @@ def quitar_del_pedido(carrito, id_producto):
     return {"ok": True, "pedido": resumen_carrito(carrito)}
 
 
+# Emojis que sí cuentan como "sí" cuando llegan SIN texto (sticker o reacción).
+EMOJIS_DE_APROBACION = {"👍", "👌", "✅", "🙌", "👏", "🤝", "💯", "✔️", "🫡"}
+
+
+def aprobacion_sin_texto_dudosa(texto):
+    """Si el mensaje es un sticker o una reacción (la recepción los pone entre corchetes) y su emoji
+    NO es de aprobación, regresa True: con eso no se puede confirmar un pedido. El código lo decide,
+    no Claude, porque un sticker de gatito no es un "sí"."""
+    if not texto.startswith("[el cliente"):
+        return False
+    return not any(e in texto for e in EMOJIS_DE_APROBACION)
+
+
 def preparar_pedido(carrito, direccion, forma_pago, estado):
     """Paso 1 de 2, como un 'show | compare' antes del 'commit': valida todo y arma el resumen EXACTO
     que Claude le lee al cliente. Todavía no guarda nada; queda "por confirmar"."""
@@ -205,9 +220,17 @@ def preparar_pedido(carrito, direccion, forma_pago, estado):
         errores.append(f"La forma de pago debe ser una de: {', '.join(FORMAS_DE_PAGO)}.")
     if errores:
         return {"error": " ".join(errores) + " Pregúntale al cliente lo que falta; no lo inventes."}
+    # Idempotente (como "agregar deja en N"): si ya había un resumen IGUAL pendiente, no se reinicia.
+    # Así, si Claude vuelve a preparar cuando el cliente ya dijo que sí, se puede confirmar enseguida.
+    clave = re.sub(r"[^a-z0-9]", "", normal(f"{direccion_texto}|{forma_pago}|{sorted(carrito.items())}"))
+    pc = estado.get("por_confirmar")
+    if pc and pc.get("clave") == clave:
+        return {"ok": True, "pedido": resumen, "ya_lo_vio": True,
+                "siguiente_paso": "El cliente YA VIO este mismo resumen. Si lo acaba de aprobar, usa "
+                                  "confirmar_pedido ahora; no se lo vuelvas a leer."}
     estado["por_confirmar"] = {
         "direccion": {k: str(direccion.get(k) or "").strip() for k in ("calle", "numero", "colonia", "referencias")},
-        "forma_pago": forma_pago, "carrito": dict(carrito), "mensaje": estado["update_id"]}
+        "forma_pago": forma_pago, "carrito": dict(carrito), "mensaje": estado["update_id"], "clave": clave}
     renglones = "; ".join(f"{r['cantidad']} x {r['producto']}: ${r['subtotal']}" for r in resumen["productos"])
     return {"ok": True, "pedido": resumen,
             "resumen_para_el_cliente": f"{renglones}. Total: ${resumen['total']}. Entrega en {direccion_texto}. "
@@ -222,7 +245,12 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, estado, prueba=False):
     mensaje posterior. El código lo exige; no depende de que Claude siga la regla."""
     pc = estado.get("por_confirmar")
     if not pc:
-        return {"error": "Primero usa preparar_pedido y léele el resumen al cliente."}
+        return {"error": "No hay un resumen preparado por el sistema (el que tú escribas no cuenta). Usa "
+                         "preparar_pedido AHORA con la dirección y la forma de pago que ya te dio el cliente, "
+                         "y léele ese resumen."}
+    if aprobacion_sin_texto_dudosa(estado.get("texto", "")):
+        return {"error": "Ese sticker o reacción no es una aprobación clara. NO confirmes: pregúntale al "
+                         "cliente si se lo mandas así."}
     if pc["mensaje"] == estado["update_id"]:
         return {"error": "El cliente todavía no ha visto el resumen. Léeselo y espera a que diga que sí."}
     if pc["carrito"] != carrito:
@@ -359,8 +387,24 @@ HERRAMIENTAS = {"tools": [
 
 
 # ---------- El bucle del agente (Claude por Bedrock) ----------
+def _precios(valor, encontrados):
+    """Junta los precios que trae un resultado de herramienta (precio, subtotal, total...)."""
+    if isinstance(valor, dict):
+        for k, v in valor.items():
+            if k in ("precio", "precio_unitario", "subtotal", "total") and isinstance(v, (int, float)):
+                encontrados.add(float(v))
+            else:
+                _precios(v, encontrados)
+    elif isinstance(valor, list):
+        for v in valor:
+            _precios(v, encontrados)
+    return encontrados
+
+
 def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, estado=None):
-    """Igual que en la Fase 1: Claude puede usar herramientas varias veces antes de contestar."""
+    """Claude puede usar herramientas varias veces antes de contestar. Antes de mandarle la respuesta al
+    cliente, el CÓDIGO la revisa con 4 guardias; si una falla, le regresa el turno a Claude y, cuando
+    aplica, lo OBLIGA a usar la herramienta correcta (toolChoice). Lo importante no depende de las reglas."""
     mensajes.append({"role": "user", "content": texto})
     del mensajes[:-MAX_MENSAJES]
     while mensajes and mensajes[0]["role"] != "user":     # Claude necesita empezar con el cliente
@@ -368,18 +412,36 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
 
     turno = [{"role": m["role"], "content": [{"text": m["content"]}]} for m in mensajes]
     traza = {"herramientas": [], "tokens_entrada": 0, "tokens_salida": 0, "paradas": []}
-    pedido_guardado = aviso_dado = reintento_dado = vacio_reintentado = False
+    estado = estado if estado is not None else {"update_id": "", "por_confirmar": None}
+    pedido_guardado = reintento_dado = False
+    guardias_usadas = set()          # cada guardia actúa una sola vez por mensaje (sin ciclos)
+    precios_vistos = set()           # precios que dieron las herramientas en este mensaje
+    forzar = None                    # herramienta que Claude DEBE usar en la siguiente vuelta ("*" = alguna)
+    carrito_inicial = dict(carrito)  # para saber si de verdad cambió el pedido en este mensaje
+    toco_carrito = False             # ¿usó agregar/quitar en este mensaje (aunque haya fallado)?
+
+    def guardia(nombre, aviso, herramienta=None):
+        nonlocal forzar
+        guardias_usadas.add(nombre)
+        traza["herramientas"].append(nombre)
+        turno.append(salida)
+        turno.append({"role": "user", "content": [{"text": "[Aviso del sistema, no del cliente] " + aviso +
+                                                            " Contéstale al cliente sin mencionar este aviso."}]})
+        forzar = herramienta
 
     for _ in range(8):                                    # máximo 8 vueltas, por seguridad
+        config = dict(HERRAMIENTAS)
+        if forzar:                                        # "usa ESTA herramienta, sí o sí"
+            config["toolChoice"] = {"any": {}} if forzar == "*" else {"tool": {"name": forzar}}
+            forzar = None
         r = bedrock.converse(modelId=MODELO, system=[{"text": instrucciones(carrito)}], messages=turno,
-                             toolConfig=HERRAMIENTAS, inferenceConfig={"maxTokens": 400})
+                             toolConfig=config, inferenceConfig={"maxTokens": 400})
         traza["tokens_entrada"] += r["usage"]["inputTokens"]
         traza["tokens_salida"] += r["usage"]["outputTokens"]
         salida = r["output"]["message"]
         traza["paradas"].append(r["stopReason"])   # por qué terminó Claude cada vuelta (para diagnosticar)
 
-        # Claude intentó usar una herramienta pero la "escribió mal": se le da UNA oportunidad más,
-        # en lugar de contestarle al cliente "me trabé".
+        # Claude intentó usar una herramienta pero la "escribió mal": UNA oportunidad más.
         if r["stopReason"] in ("malformed_tool_use", "malformed_model_output") and not reintento_dado:
             reintento_dado = True
             traza["herramientas"].append("REINTENTO")
@@ -387,25 +449,62 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
 
         if r["stopReason"] != "tool_use":
             texto_final = "".join(b.get("text", "") for b in salida["content"])
-            # Claude terminó SIN decir nada (la causa real del "me trabé"): se le pide el texto UNA vez.
-            if not texto_final.strip() and not vacio_reintentado:
-                vacio_reintentado = True
+            # 0. Terminó SIN decir nada (la causa real del "me trabé"): se le pide el texto UNA vez.
+            if not texto_final.strip() and "SIN_TEXTO" not in guardias_usadas:
+                guardias_usadas.add("SIN_TEXTO")
                 traza["herramientas"].append("SIN_TEXTO")
                 turno[-1]["content"].append({"text": "[Aviso del sistema, no del cliente] Ahora contéstale al "
                                                      "cliente con un mensaje de texto breve."})
                 continue
-            # GUARDIA: ¿dice que ya quedó (confirmado o con folio) sin haber guardado el pedido de verdad?
             t = normal(texto_final)
-            dice_que_quedo = "?" not in t and (re.search(r"\bconfirmad[oa]\b", t) or re.search(r"\bfolio\b", t))
-            if dice_que_quedo and not pedido_guardado and carrito and not aviso_dado:
-                aviso_dado = True
-                traza["herramientas"].append("GUARDIA")
-                turno.append(salida)
-                turno.append({"role": "user", "content": [{"text": "[Aviso del sistema, no del cliente] Dijiste que "
-                              "el pedido quedó, pero NO usaste confirmar_pedido y el pedido NO se guardó. "
-                              "Si el cliente ya dijo que sí al resumen, usa confirmar_pedido; si no, usa "
-                              "preparar_pedido o pregúntale lo que falta. Contéstale al cliente sin mencionar "
-                              "este aviso."}]})
+            pedido_actual = resumen_carrito(carrito)
+
+            # 1. GUARDIA_PRECIO: ¿dio un precio que ninguna herramienta le dio?
+            permitidos = _precios(pedido_actual, set(precios_vistos))
+            precios_dichos = {float(m) for m in re.findall(r"\$\s?(\d+(?:\.\d+)?)", texto_final)}
+            if precios_dichos - permitidos and "GUARDIA_PRECIO" not in guardias_usadas:
+                guardia("GUARDIA_PRECIO", "Diste un precio sin consultarlo. Usa buscar_producto y da solo el "
+                        "precio que te regrese.", "buscar_producto")
+                continue
+
+            # 2. GUARDIA_CAMBIO: ¿dice que quitó/agregó/cambió algo, pero el pedido sigue igual?
+            dice_que_cambio = re.search(r"\b(quite|quitad[oa]s?|elimine|eliminad[oa]s?|saque|sacad[oa]s?|"
+                                        r"agregue|agregad[oa]s?|anadi|anadid[oa]s?|cambie|cambiad[oa]s?)\b", t)
+            if (dice_que_cambio and carrito == carrito_inicial and not toco_carrito
+                    and "GUARDIA_CAMBIO" not in guardias_usadas):
+                guardia("GUARDIA_CAMBIO", "Dijiste que cambiaste el pedido, pero no usaste ninguna herramienta y "
+                        "el pedido sigue igual. Haz el cambio con la herramienta que corresponda.", "*")
+                continue
+
+            # 3. GUARDIA_TOTAL: ¿dijo un "total" distinto al total real del carrito?
+            totales = [float(m) for m in re.findall(r"total[^$\d]{0,20}\$\s?(\d+(?:\.\d+)?)", t)]
+            if (carrito and not pedido_guardado and any(x != pedido_actual["total"] for x in totales)
+                    and "GUARDIA_TOTAL" not in guardias_usadas):
+                guardia("GUARDIA_TOTAL", f"Dijiste un total que no es el real. El pedido real es: "
+                        f"{json.dumps(pedido_actual, ensure_ascii=False)}. Corrígelo con el cliente.", "ver_pedido")
+                continue
+
+            # 4. GUARDIA_RESUMEN: ¿escribió él mismo el resumen del pedido, sin preparar_pedido?
+            parece_resumen = (carrito and f"${pedido_actual['total']}" in texto_final and "?" in t
+                              and re.search(r"correct|te lo mando|\basi\b|confirm", t) is not None)
+            if parece_resumen and not estado.get("por_confirmar") and "GUARDIA_RESUMEN" not in guardias_usadas:
+                guardia("GUARDIA_RESUMEN", "Ese resumen lo escribiste tú y no cuenta. Usa preparar_pedido con "
+                        "la dirección y la forma de pago que ya dio el cliente, y léele el resumen que te "
+                        "regrese; si la herramienta dice que falta algo, pregúntalo.", "preparar_pedido")
+                continue
+
+            # 5. GUARDIA: ¿dice que ya quedó (confirmado, folio, "ahí va", "en camino") sin haberlo guardado?
+            # Se revisan solo las afirmaciones: las preguntas ("¿te lo confirmo?") se quitan antes.
+            afirmaciones = re.sub(r"¿[^?]*\?", " ", t)
+            dice_que_quedo = re.search(r"\b(confirmad[oa]|folio|en camino|ahi va tu pedido|ya va tu pedido|"
+                                       r"te llegara|quedo listo)\b", afirmaciones)
+            if dice_que_quedo and not pedido_guardado and carrito and "GUARDIA" not in guardias_usadas:
+                if estado.get("por_confirmar"):
+                    guardia("GUARDIA", "Dijiste que el pedido quedó, pero no usaste confirmar_pedido. Úsala "
+                            "ahora; si el sistema la rechaza, sigue lo que te diga.", "confirmar_pedido")
+                else:
+                    guardia("GUARDIA", "Dijiste que el pedido quedó, pero todavía no hay resumen ni pedido "
+                            "guardado. Usa preparar_pedido y léele el resumen al cliente.", "preparar_pedido")
                 continue
             break
 
@@ -416,6 +515,9 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
                 uso = b["toolUse"]
                 resultado = usar_herramienta(uso["name"], uso.get("input", {}), chat_id, carrito, nombre_cliente,
                                              prueba, estado)
+                _precios(resultado, precios_vistos)
+                if uso["name"] in ("agregar_al_pedido", "quitar_del_pedido"):
+                    toco_carrito = True
                 if prueba:   # el examen necesita ver qué pidió Claude y qué le contestó el código
                     traza.setdefault("detalle", []).append({"herramienta": uso["name"], "entrada": uso.get("input", {}),
                                                             "resultado": resultado})
@@ -510,7 +612,7 @@ def procesar(mensaje):
 
     if texto == "/start":                                 # /start = empezar de cero
         mensajes, carrito, texto, por_confirmar = [], {}, "Hola", None
-    estado = {"update_id": update_id, "por_confirmar": por_confirmar}
+    estado = {"update_id": update_id, "por_confirmar": por_confirmar, "texto": texto}
 
     inicio = time.time()
     respuesta, traza = responder(chat_id, texto, nombre, mensajes, carrito, prueba, estado)
