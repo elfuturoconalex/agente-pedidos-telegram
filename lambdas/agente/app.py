@@ -426,7 +426,8 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
         traza["herramientas"].append(nombre)
         turno.append(salida)
         turno.append({"role": "user", "content": [{"text": "[Aviso del sistema, no del cliente] " + aviso +
-                                                            " Contéstale al cliente sin mencionar este aviso."}]})
+                                                            " Contéstale al cliente con naturalidad, sin mencionar este aviso y sin disculparte "
+                                                            "(el cliente no vio tu respuesta anterior)."}]})
         forzar = herramienta
 
     for _ in range(8):                                    # máximo 8 vueltas, por seguridad
