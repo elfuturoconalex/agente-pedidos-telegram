@@ -247,12 +247,6 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 - **Dependencias en Terraform:** la fila principal necesita la dirección (ARN) de la DLQ, así que Terraform creó primero la DLQ sin que yo le dijera el orden.
 - **`true` / `false`** en código es "sí / no", como `no shutdown` / `shutdown`.
 
-### Repaso de código (fragmentos)
-| Fragmento | Resultado | Lo que me faltaba |
-|---|---|---|
-| `dynamodb.tf` (Sesión 6) | 2.5 de 5 | PK/SK (carpeta y hoja), apodo interno vs. nombre real, protección contra borrado |
-| `sqs.tf` | 2.5 de 5 | Qué es `true`, invisibilidad (es al revés), el ARN es la dirección, no donde se guarda |
-
 ### Problemas y cómo los resolví
 - **"No valid credential sources found" en Terraform** → la llave temporal de 8 horas caducó (así debe ser). `aws sso login --profile personal` y listo.
 
@@ -300,11 +294,6 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 - **Arranque en frío:** la primera vez la Lambda tarda ~0.5 s más en "despertar"; AWS también cobra ese arranque.
 - **Probar en capas:** primero en local, luego con un mensaje falso a la fila, luego la puerta sin clave y al final desde el celular. Cada capa aísla un problema.
 - **Con el webhook, `empleado.py` ya no funciona en la Mac:** Telegram deja de usar el buzón (polling) y toca el timbre en AWS.
-
-### Repaso de código
-| Fragmento | Resultado | Lo que me faltaba |
-|---|---|---|
-| `lambdas/recepcion/app.py` | 3.5 de 6 | Códigos HTTP (200 = recibido, 401 = no autorizado); con una foto se contesta 200 para que Telegram no la reintente; el anti-duplicados tira el repetido, no lo actualiza. ✅ Pregunta de entrevista: sin la clave, cualquiera mete mensajes falsos (defensa en capas) |
 
 ### Para la Fase 3
 - Aceptó "Calle bellavista #2" sin colonia: la validación de dirección debe ser más estricta.
@@ -354,11 +343,6 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 - **Observabilidad:** la traza decía *que* falló, pero no *por qué* (un ping sin código de error). Ahora guarda el motivo de cada vuelta.
 - **Defensa en capas para el aviso:** si se perdiera, el pedido sigue en `/pendientes`. "El aviso es la campanita; la lista es la libreta."
 
-### Repaso de código
-| Fragmento | Resultado | Lo que me faltaba |
-|---|---|---|
-| `lambdas/agente/dueno.py` (`/entregado`) | 0.75 de 4 | `next(...)` = hojear la lista y quedarse con el primero que cumple (o "nada"); `/pendientes` solo pregunta por la carpeta `ESTADO#nuevo` del índice (como una VLAN: cambias el puerto de VLAN y deja de verse ahí); la condición evita marcarlo dos veces y que se reescriba la hora de entrega. ✅ Entrevista: el código lee los números exactos de DynamoDB (faltó decir: el dinero debe ser exacto, y así es más barato y rápido) |
-
 ### Para la Fase 3
 - **La GUARDIA volvió a actuar** al confirmar DC-0005: hay que reforzar la instrucción de usar `confirmar_pedido` antes de decir "confirmado".
 - **Vigilar las `paradas`** en la traza para confirmar si el "me trabé" fue una herramienta mal escrita (`malformed_tool_use`).
@@ -406,11 +390,6 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 - **Modo prueba aislado = VLAN de pruebas:** el mismo camino real, pero con sus propios folios y ventas, y sin poder activarse desde Telegram.
 - **Aprobar el examen no es todo:** el examen revisa datos; al leer las pláticas vi que el agente responde existencias sin consultar la herramienta, porque la lista ya va en sus instrucciones. Las instrucciones se contradicen.
 - **Si el código no cambia en AWS, no cambia nada:** editar el archivo no basta; hay que hacer `terraform apply`.
-
-### Repaso de código
-| Fragmento | Resultado | Lo que me faltaba |
-|---|---|---|
-| `infra/alarmas.tf` (la alarma) | 1.75 de 4 | `for_each` crea **una alarma por cada fila de la lista: 2**; suena cuando, en una ventana de 5 minutos, el máximo de mensajes esperando en la fila llega a 1 o más; `ok_actions` manda el correo de "ya se resolvió" (sin él, no sabría si el problema sigue). ✅ Entrevista: vigilar lo que importa (pedidos que no se procesaron), no cada error; faltó decir que los errores pasajeros ya se reintentan solos y alarmar cada uno sería puro ruido |
 
 ### Para la Fase 3
 - Decidir: existencias desde la lista de las instrucciones y precio con la herramienta, o quitar la lista y obligar a consultar.
@@ -478,11 +457,6 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 - **Un mismo caso a veces pasa y a veces no.** Un 15/15 no prueba mucho: hay que correr varias veces y medir el porcentaje.
 - **Las reacciones no se ven como burbuja en el chat.** Los "dos mensajes seguidos" eran la respuesta a una reacción; los logs lo aclararon (la recepción registra el `tipo`).
 - **Eliminar una contradicción en las instrucciones bajó el costo 10%.** Instrucciones claras = menos vueltas.
-
-### Repaso de código
-| Fragmento | Resultado | Lo que me faltaba |
-|---|---|---|
-| `lambdas/agente/app.py` (aprobación sin texto y confirmar) | Pendiente | |
 
 ### Para el examen grande
 - Bajar las correcciones: Claude anuncia "confirmado" antes de usar la herramienta (5 de 42 mensajes).
