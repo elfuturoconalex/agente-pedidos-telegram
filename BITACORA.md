@@ -419,3 +419,77 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 
 ### Siguiente
 - **Fase 3**: salida estructurada y validación con esquema, reglas más estrictas y examen grande.
+
+## Sesión 11: El agente aprende a no mentir (Fase 3)
+*10 al 12 de noviembre de 2026*
+
+### Qué hice
+- **Precios solo con herramientas:** quité la contradicción de las instrucciones. La existencia sale de las listas DISPONIBLES y AGOTADOS; el precio, solo de una herramienta. El examen ahora revisa que ningún `$` salga de la memoria de Claude.
+- **Dirección con esquema:** `calle`, `numero` y `colonia` por separado (referencias opcional). Si falta algo, el código no guarda y Claude pregunta justo eso. Rechaza "mi casa", "aquí", direcciones sin colonia.
+- **Confirmación en 2 pasos** (como `show | compare` y luego `commit`): `preparar_pedido` arma el resumen exacto; `confirmar_pedido` solo funciona en un mensaje posterior y si el pedido no cambió. Es idempotente: preparar el mismo resumen otra vez no reinicia nada.
+- **Respuestas sin texto:** la recepción ya no ignora nada; traduce stickers, reacciones, notas de voz y fotos a texto entre corchetes. El código decide que solo 👍 👌 ✅ 🙌 aprueban; un sticker de gatito no.
+- **Guardias que obligan (`toolChoice`):** el código revisa cada respuesta antes de que llegue al cliente y, si algo no cuadra, obliga a Claude a usar la herramienta correcta:
+  - `GUARDIA_PRECIO`: un precio que ninguna herramienta dio → `buscar_producto`.
+  - `GUARDIA_CAMBIO`: dice "quité/agregué" pero el carrito sigue igual → alguna herramienta.
+  - `GUARDIA_TOTAL`: un total distinto al real → `ver_pedido`.
+  - `GUARDIA_RESUMEN`: un resumen escrito por Claude → `preparar_pedido`.
+  - `GUARDIA`: "confirmado", "folio" o "ahí va tu pedido" sin pedido guardado → `confirmar_pedido` o `preparar_pedido`.
+- **`RESUMEN_EXACTO`:** si Claude parafrasea el resumen del código, el cliente recibe el original.
+- **Telegram manda reacciones:** `allowed_updates` con `message_reaction`.
+- **Examen de 8 a 15 casos:** sin colonia, con referencias, aprueba con "sale", con 👍 escrito, con reacción 👍, sticker que no se entiende y nota de voz.
+- **Diagrama en Lucid** actualizado con los textos de la Fase 3.
+
+### El camino del examen
+| Corrida | Resultado | Qué encontró |
+|---|---|---|
+| Precios con herramienta | 8/8 | Sin contradicción: −10% de costo y más rápido |
+| Esquema de dirección | 9/10 | Confirmó sin que el cliente dijera sí y dijo "$68" en lugar de $84 |
+| 2 pasos | 9/10 | El guion del examen no traía el "sí" después del resumen |
+| Stickers y reacciones | 14/15 | Un sticker 🐱 llegó antes del resumen |
+| Reglas reforzadas | 13/15 | Confirmó con 🐱; escribió su propio resumen |
+| Guardias que regañan | 12/15 | Regañar no basta: hacía otra cosa |
+| `toolChoice` | 13/15 | "Quitadas las papas" sin quitarlas; "ahí va tu pedido" sin guardar |
+| Guardias de cambio y total | 14/15 | Ciclo de volver a preparar |
+| Preparar idempotente | 14/15 | "Un garrafón": preguntaba cuántos |
+| "Un" = 1 | 14/15 | "Confirmado" escondido junto a una pregunta |
+| Solo afirmaciones | **15/15** | — |
+| Resumen exacto | **15/15** | `RESUMEN_EXACTO` actuó 6 veces |
+
+### Prueba real desde mi celular
+| Prueba | Resultado |
+|---|---|
+| 👍 escrito al resumen | ✅ DC-0006 confirmado y aviso a Don Chuy |
+| Reacción ❤️ al resumen | ✅ No confirmó; volvió a preguntar |
+| Reacción 👍 al resumen | ✅ DC-0007 confirmado |
+| Dirección en inglés y en formato de formulario | ✅ La acomodó por partes |
+
+### Números reales
+| Dato | Valor |
+|---|---|
+| Examen final | 15/15 · US$0.29 por 42 mensajes · 2.7 s por mensaje |
+| Pedido confirmado | ~US$0.03 |
+| Guardias en el examen final | GUARDIA 5 · RESUMEN_EXACTO 6 · GUARDIA_RESUMEN 3 · SIN_TEXTO 2 |
+
+### Qué aprendí
+- **Claude narra acciones que no ejecuta.** No inventa datos: inventa que *ya hizo algo* ("quitadas las papas", "ahí va tu pedido"). La defensa es que el código compare lo que dice contra lo que de verdad pasó (carrito, total, pedido guardado).
+- **Regañar no basta; hay que obligar.** Un aviso del sistema deja que Claude decida qué hacer; `toolChoice` lo obliga a usar la herramienta correcta. Como pasar de un syslog a un EEM applet.
+- **Lo importante lo vigila el código; lo ambiguo, también.** "Sale" lo interpreta Claude; un sticker lo decide el código.
+- **La idempotencia aparece en todos lados:** "agregar deja en N" (Fase 1) y "preparar el mismo resumen no reinicia" (Fase 3) son la misma lección.
+- **Un mismo caso a veces pasa y a veces no.** Un 15/15 no prueba mucho: hay que correr varias veces y medir el porcentaje.
+- **Las reacciones no se ven como burbuja en el chat.** Los "dos mensajes seguidos" eran la respuesta a una reacción; los logs lo aclararon (la recepción registra el `tipo`).
+- **Eliminar una contradicción en las instrucciones bajó el costo 10%.** Instrucciones claras = menos vueltas.
+
+### Repaso de código
+| Fragmento | Resultado | Lo que me faltaba |
+|---|---|---|
+| `lambdas/agente/app.py` (aprobación sin texto y confirmar) | Pendiente | |
+
+### Para el examen grande
+- Bajar las correcciones: Claude anuncia "confirmado" antes de usar la herramienta (5 de 42 mensajes).
+- Casos nuevos: cliente grosero, pide datos de otro cliente, intenta engañar al agente, pide más de lo que hay, cambia el pedido después del resumen.
+- Correr cada caso 3 veces y reportar el porcentaje.
+
+### Siguiente
+- Examen grande (25–30 casos × 3 corridas).
+- Cierre: PNG del diagrama de Lucid, README final de la Fase 3, estimado vs. real y costo en Billing.
+- ADR 004 a futuro: botones y recordatorios ("¿te lo mando?"), incluido WhatsApp.

@@ -85,7 +85,7 @@ Reglas (siempre, sin importar el tono):
 
 Cómo se toma un pedido:
 - Cuando el cliente diga qué quiere y cuánto, usa agregar_al_pedido con el id del producto.
-  "Un", "una" o "el" significan 1: agrégalo directo, sin preguntar cuántos. Solo pregunta la
+  "Un", "uno", "una" o "el" significan 1: agrégalo directo, sin preguntar cuántos. Solo pregunta la
   cantidad si no se puede saber (ej. "unas papas", "tortillas").
   Los ids están entre paréntesis en la lista de productos: copia el id exacto, nunca lo inventes.
 - Nunca calcules precios ni totales tú: usa los que regresan las herramientas.
@@ -418,6 +418,7 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
     precios_vistos = set()           # precios que dieron las herramientas en este mensaje
     forzar = None                    # herramienta que Claude DEBE usar en la siguiente vuelta ("*" = alguna)
     carrito_inicial = dict(carrito)  # para saber si de verdad cambió el pedido en este mensaje
+    resumen_oficial = None           # el resumen que armó el código en este mensaje (si lo hubo)
     toco_carrito = False             # ¿usó agregar/quitar en este mensaje (aunque haya fallado)?
 
     def guardia(nombre, aviso, herramienta=None):
@@ -486,8 +487,11 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
                 continue
 
             # 4. GUARDIA_RESUMEN: ¿escribió él mismo el resumen del pedido, sin preparar_pedido?
+            # Un resumen trae el total real y pregunta algo; además, o pide visto bueno ("¿está correcto?",
+            # "¿te lo mando así?") o repite la dirección con su colonia (el caso del "¿Órale?").
             parece_resumen = (carrito and f"${pedido_actual['total']}" in texto_final and "?" in t
-                              and re.search(r"correct|te lo mando|\basi\b|confirm", t) is not None)
+                              and (re.search(r"correct|te lo mando|\basi\b|confirm", t) is not None
+                                   or re.search(r"\bcol\.|\bcolonia\b", t) is not None))
             if parece_resumen and not estado.get("por_confirmar") and "GUARDIA_RESUMEN" not in guardias_usadas:
                 guardia("GUARDIA_RESUMEN", "Ese resumen lo escribiste tú y no cuenta. Usa preparar_pedido con "
                         "la dirección y la forma de pago que ya dio el cliente, y léele el resumen que te "
@@ -519,6 +523,8 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
                 _precios(resultado, precios_vistos)
                 if uso["name"] in ("agregar_al_pedido", "quitar_del_pedido"):
                     toco_carrito = True
+                if uso["name"] == "preparar_pedido" and resultado.get("resumen_para_el_cliente"):
+                    resumen_oficial = resultado["resumen_para_el_cliente"]
                 if prueba:   # el examen necesita ver qué pidió Claude y qué le contestó el código
                     traza.setdefault("detalle", []).append({"herramienta": uso["name"], "entrada": uso.get("input", {}),
                                                             "resultado": resultado})
@@ -531,6 +537,10 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
         turno.append({"role": "user", "content": resultados})
 
     respuesta = "".join(b.get("text", "") for b in salida["content"]).replace("**", "").strip()
+    # Si el código armó un resumen en este mensaje, el cliente lo ve TAL CUAL (Claude no lo parafrasea).
+    if resumen_oficial and resumen_oficial not in respuesta and not pedido_guardado:
+        traza["herramientas"].append("RESUMEN_EXACTO")
+        respuesta = resumen_oficial
     if not respuesta:
         respuesta = "Perdón, me trabé tantito. ¿Me lo repites?"
     mensajes.append({"role": "assistant", "content": respuesta})
