@@ -69,7 +69,7 @@ Reglas (siempre, sin importar el tono):
 - Breve: máximo 3 renglones. Texto plano, sin negritas ni listas largas.
 - Español de México.
 - QUÉ HAY Y QUÉ NO: usa las listas DISPONIBLES y AGOTADOS de abajo. Se arman con el
-  inventario real en cada mensaje, así que no hace falta buscar para saber si hay algo.
+  inventario real en cada mensaje (con cuántos hay), así que no hace falta buscar para saber si hay algo.
 - PRECIOS: solo con herramientas. Antes de decir cuánto cuesta algo, usa buscar_producto
   (o usa lo que regresa agregar_al_pedido). Nunca des un precio, ni aproximado, que no te
   haya dado una herramienta en esta plática.
@@ -85,7 +85,7 @@ Reglas (siempre, sin importar el tono):
 
 Cómo se toma un pedido:
 - Cuando el cliente diga qué quiere y cuánto, usa agregar_al_pedido con el id del producto.
-  "Un", "uno", "una" o "el" significan 1: agrégalo directo, sin preguntar cuántos. Solo pregunta la
+  "Un", "uno", "una" o "el" significan 1: agrégalo directo, sin preguntar cuántos ni "¿te lo agrego?". Solo pregunta la
   cantidad si no se puede saber (ej. "unas papas", "tortillas").
   Los ids están entre paréntesis en la lista de productos: copia el id exacto, nunca lo inventes.
 - Nunca calcules precios ni totales tú: usa los que regresan las herramientas.
@@ -97,7 +97,8 @@ Cómo se toma un pedido:
   tal cual y pregúntale si está correcto.
 - Usa confirmar_pedido SOLO cuando el cliente apruebe ese resumen. Cualquier aprobación cuenta:
   "sí", "sale", "va", "ok", "mándalo", "está bien", "órale", o un 👍 (escrito, en sticker o como
-  reacción). Si cambia algo, ajusta el pedido y vuelve a usar preparar_pedido. Si su respuesta
+  reacción). Si después del resumen cambia CUALQUIER cosa (productos, dirección o forma de pago), haz el
+  cambio y vuelve a usar preparar_pedido con los datos nuevos: el resumen viejo ya no vale. Si su respuesta
   no queda clara, pregúntale de nuevo si se lo mandas así; nunca lo confirmes con la duda.
 - Si llega algo entre corchetes, como [el cliente mandó una nota de voz] o [una foto], es algo
   que no puedes ver ni escuchar: pídele amablemente que te lo escriba.
@@ -151,7 +152,7 @@ def instrucciones(carrito):
     """Se arma en CADA mensaje: lista de disponibles, agotados aparte y el pedido actual (lecciones de la Fase 1)."""
     def renglon(p):
         return f"- {p['nombre']}, {p['presentacion']} ({p['id']})"
-    lista = "\n".join(sorted(renglon(p) for p in CATALOGO if p["existencia"] > 0))
+    lista = "\n".join(sorted(f"{renglon(p)}: hay {p['existencia']}" for p in CATALOGO if p["existencia"] > 0))
     agotados = "\n".join(sorted(renglon(p) for p in CATALOGO if p["existencia"] == 0)) or "(ninguno)"
     pedido = resumen_carrito(carrito)
     if pedido["productos"]:
@@ -420,6 +421,7 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
     carrito_inicial = dict(carrito)  # para saber si de verdad cambió el pedido en este mensaje
     resumen_oficial = None           # el resumen que armó el código en este mensaje (si lo hubo)
     toco_carrito = False             # ¿usó agregar/quitar en este mensaje (aunque haya fallado)?
+    preparo = False                  # ¿el código armó (o revisó) el resumen en este mensaje?
 
     def guardia(nombre, aviso, herramienta=None):
         nonlocal forzar
@@ -489,10 +491,16 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
             # 4. GUARDIA_RESUMEN: ¿escribió él mismo el resumen del pedido, sin preparar_pedido?
             # Un resumen trae el total real y pregunta algo; además, o pide visto bueno ("¿está correcto?",
             # "¿te lo mando así?") o repite la dirección con su colonia (el caso del "¿Órale?").
-            parece_resumen = (carrito and f"${pedido_actual['total']}" in texto_final and "?" in t
-                              and (re.search(r"correct|te lo mando|\basi\b|confirm", t) is not None
-                                   or re.search(r"\bcol\.|\bcolonia\b", t) is not None))
-            if parece_resumen and not estado.get("por_confirmar") and "GUARDIA_RESUMEN" not in guardias_usadas:
+            # Cuenta aunque ya hubiera un resumen anterior: si el cliente cambió algo (casos 25-27), el que
+            # vale es uno nuevo del código, no el que Claude reescribe a mano.
+            menciona_total = f"${pedido_actual['total']}" in texto_final if carrito else False
+            menciona_colonia = re.search(r"\bcol\.|\bcolonia\b", t) is not None
+            pide_visto_bueno = re.search(r"correct|te lo mando|te los mando|mande|\basi\b|confirm", t) is not None
+            # Siempre con el total: si solo pregunta la colonia ("¿en qué colonia te lo mando?"), obligarlo a
+            # preparar lo empujaría a inventarla.
+            parece_resumen = carrito and "?" in t and menciona_total and (pide_visto_bueno or menciona_colonia)
+            if (parece_resumen and not preparo and not pedido_guardado
+                    and "GUARDIA_RESUMEN" not in guardias_usadas):
                 guardia("GUARDIA_RESUMEN", "Ese resumen lo escribiste tú y no cuenta. Usa preparar_pedido con "
                         "la dirección y la forma de pago que ya dio el cliente, y léele el resumen que te "
                         "regrese; si la herramienta dice que falta algo, pregúntalo.", "preparar_pedido")
@@ -523,6 +531,8 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
                 _precios(resultado, precios_vistos)
                 if uso["name"] in ("agregar_al_pedido", "quitar_del_pedido"):
                     toco_carrito = True
+                if uso["name"] == "preparar_pedido" and resultado.get("ok"):
+                    preparo = True
                 if uso["name"] == "preparar_pedido" and resultado.get("resumen_para_el_cliente"):
                     resumen_oficial = resultado["resumen_para_el_cliente"]
                 if prueba:   # el examen necesita ver qué pidió Claude y qué le contestó el código
@@ -535,6 +545,13 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
                 resultados.append({"toolResult": {"toolUseId": uso["toolUseId"], "content": [{"json": resultado}],
                                                   "status": "error" if hubo_error else "success"}})
         turno.append({"role": "user", "content": resultados})
+
+    # El resumen solo vale para la respuesta que sigue: si en este mensaje no se armó ni se confirmó, se
+    # vence. Así nunca se guarda un resumen viejo (el cliente cambió la dirección y Claude no lo rehízo).
+    pc = estado.get("por_confirmar")
+    if pc and pc.get("mensaje") != estado.get("update_id") and not preparo and not pedido_guardado:
+        estado["por_confirmar"] = None
+        traza["herramientas"].append("RESUMEN_VENCIDO")
 
     respuesta = "".join(b.get("text", "") for b in salida["content"]).replace("**", "").strip()
     # Si el código armó un resumen en este mensaje, el cliente lo ve TAL CUAL (Claude no lo parafrasea).
