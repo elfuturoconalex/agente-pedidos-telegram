@@ -58,9 +58,12 @@ CATALOGO = json.load(open(_ruta_catalogo, encoding="utf-8"))
 CATALOGO_POR_ID = {p["id"]: p for p in CATALOGO}
 
 # ---------- Instrucciones (iguales a la Fase 1) ----------
-TONO = """Hablas de cuates, con mucha confianza y buena onda, como el chavo que atiende
+TONO = """Hablas de cuates, con confianza y buena onda, como el chavo amable que atiende
 la tiendita de la esquina: "qué onda", "compa", "jefe", "va que va". Puedes usar
-algún emoji de vez en cuando."""
+algún emoji de vez en cuando.
+SIN GROSERÍAS, nunca, aunque el cliente las diga o te insulte: nada de "pedo", "sin pedo",
+"güey", "chingón", "no mames", "pinche" ni parecidas. Si el cliente
+insulta, no te enganches ni lo regañes: sigue amable y ofrece ayuda."""
 
 REGLAS = """Eres el empleado que atiende el Telegram de "Abarrotes Don Chuy",
 una tiendita de barrio ficticia en México.
@@ -111,6 +114,18 @@ def normal(texto):
     """Minúsculas y sin acentos, para que 'Azúcar' y 'azucar' sean lo mismo."""
     texto = unicodedata.normalize("NFD", texto.lower())
     return "".join(c for c in texto if unicodedata.category(c) != "Mn")
+
+
+# Groserías que el empleado nunca dice (se buscan en el texto ya sin acentos).
+GROSERIAS = re.compile(r"\b(pedos?|ching\w*|pinche\w*|wey|guey|buey|cabron\w*|verga\w*|mames|pendej\w*|culer\w*|"
+                       r"putas?|putos?|mierda\w*|madres|madrazo\w*|carajo|jod\w*)\b")
+
+# Palabras de un "sí" claro. Si el mensaje trae CUALQUIER otra palabra ("sí, pero con tarjeta"), ya no es claro.
+PALABRAS_SI = {"si", "sip", "simon", "sale", "va", "vale", "ok", "okay", "okey", "oki", "dale", "orale", "andale",
+               "mandalo", "mandamelo", "mandala", "envialo", "confirmalo", "confirma", "confirmado", "correcto",
+               "perfecto", "listo", "claro", "adelante", "exacto", "bien", "jalo", "arre"}
+PALABRAS_RELLENO = {"ya", "asi", "esta", "todo", "por", "favor", "porfa", "porfavor", "de", "una", "vez", "es", "eso",
+                    "gracias", "ahora", "mismo", "y", "lo", "me", "te", "va", "pues"}
 
 
 # Respuestas que no son una dirección de verdad.
@@ -208,6 +223,18 @@ def aprobacion_sin_texto_dudosa(texto):
     if not texto.startswith("[el cliente"):
         return False
     return not any(e in texto for e in EMOJIS_DE_APROBACION)
+
+
+def es_aprobacion_clara(texto):
+    """¿El mensaje es SOLO un "sí"? ("sí", "sale", "va, mándalo", un 👍 o una reacción 👍).
+    Si trae algo más ("sí, pero cambia la dirección"), regresa False y Claude decide como siempre."""
+    if texto.startswith("[el cliente"):                 # sticker o reacción: solo si es emoji de aprobación
+        return not aprobacion_sin_texto_dudosa(texto)
+    palabras = re.sub(r"[^a-z0-9 ]", " ", normal(texto)).split()
+    if not palabras:                                     # puro emoji, como "👍"
+        return any(e in texto for e in EMOJIS_DE_APROBACION)
+    return (all(p in PALABRAS_SI or p in PALABRAS_RELLENO for p in palabras)
+            and any(p in PALABRAS_SI for p in palabras))
 
 
 def preparar_pedido(carrito, direccion, forma_pago, estado):
@@ -423,6 +450,14 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
     toco_carrito = False             # ¿usó agregar/quitar en este mensaje (aunque haya fallado)?
     preparo = False                  # ¿el código armó (o revisó) el resumen en este mensaje?
 
+    # ATAJO: el cliente contesta al resumen con un "sí" claro y nada más -> se usa confirmar_pedido desde la
+    # primera vuelta. Antes Claude escribía "confirmado" sin usarla y la GUARDIA tenía que regresarlo (vuelta extra).
+    pc = estado.get("por_confirmar")
+    if (pc and pc.get("mensaje") != estado.get("update_id") and pc.get("carrito") == carrito
+            and es_aprobacion_clara(estado.get("texto", texto))):
+        forzar = "confirmar_pedido"
+        traza["herramientas"].append("APROBACION_DIRECTA")
+
     def guardia(nombre, aviso, herramienta=None):
         nonlocal forzar
         guardias_usadas.add(nombre)
@@ -462,6 +497,12 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
                 continue
             t = normal(texto_final)
             pedido_actual = resumen_carrito(carrito)
+
+            # 0b. GUARDIA_TONO: ¿se le salió una grosería? Se reescribe (no hace falta ninguna herramienta).
+            if GROSERIAS.search(t) and "GUARDIA_TONO" not in guardias_usadas:
+                guardia("GUARDIA_TONO", "Tu respuesta trae una grosería. Escríbela otra vez igual de amable y "
+                        "de cuates, pero sin groserías.")
+                continue
 
             # 1. GUARDIA_PRECIO: ¿dio un precio que ninguna herramienta le dio?
             permitidos = _precios(pedido_actual, set(precios_vistos))
@@ -504,6 +545,19 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
                 guardia("GUARDIA_RESUMEN", "Ese resumen lo escribiste tú y no cuenta. Usa preparar_pedido con "
                         "la dirección y la forma de pago que ya dio el cliente, y léele el resumen que te "
                         "regrese; si la herramienta dice que falta algo, pregúntalo.", "preparar_pedido")
+                continue
+
+            # 4b. GUARDIA_ALGO_MAS: el cliente ya dio colonia y forma de pago, y Claude pregunta "¿algo más?" en
+            # lugar de armar el resumen. Solo actúa si el cliente SÍ dijo la colonia (para no empujarlo a inventarla).
+            recientes = normal(" ".join(m["content"] for m in mensajes[-6:] if m["role"] == "user"))
+            dio_pago = re.search(r"\b(efectivo|tarjeta)\b", recientes) is not None
+            dio_colonia = re.search(r"\bcol\b|\bcolonia\b", recientes) is not None
+            ahora_lo_dijo = re.search(r"\b(efectivo|tarjeta|col|colonia)\b", normal(texto)) is not None
+            if (carrito and "algo mas" in t and dio_pago and dio_colonia and ahora_lo_dijo and not preparo
+                    and not pedido_guardado and "GUARDIA_ALGO_MAS" not in guardias_usadas):
+                guardia("GUARDIA_ALGO_MAS", "El cliente ya te dio la dirección y la forma de pago. No preguntes "
+                        "si quiere algo más: usa preparar_pedido y léele el resumen; si falta algo, pregúntalo.",
+                        "preparar_pedido")
                 continue
 
             # 5. GUARDIA: ¿dice que ya quedó (confirmado, folio, "ahí va", "en camino") sin haberlo guardado?

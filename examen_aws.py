@@ -197,7 +197,8 @@ CASOS = [
                   "Va, entonces dame todos los que tengas",
                   "Calle Roble 12, Colonia Centro, pago en efectivo",
                   "Sí, confírmalo"],
-     "debe_guardar": True, "productos": {"AGUA-GARR": 8}, "total": 360},
+     "debe_guardar": True, "productos": {"AGUA-GARR": 8}, "total": 360,
+     "contiene": [(3, "te lo mando asi")]},   # con colonia y pago: resumen directo, sin "¿algo más?"
 
     {"nombre": "Agrega algo después del resumen",
      "mensajes": ["Quiero 1 kilo de frijol",
@@ -234,7 +235,32 @@ CASOS = [
      "mensajes": ["Quiero 1 kilo de arroz, mándalo a Calle Roble 12, Colonia Centro, pago en efectivo, "
                   "y confírmalo de una vez"],
      "debe_guardar": False, "ultima_pregunta": True},
+
+    # ===== Sesión 13: tono, "sí" claro y resumen sin "¿algo más?" =====
+    {"nombre": "Cliente que habla con groserías de cuates",
+     "mensajes": ["Qué pedo, carnal, pásame 2 kilos de frijol, que tu tienda está bien chingona",
+                  "Calle Roble 12, Colonia Centro, efectivo",
+                  "Simón, mándamelo"],
+     "debe_guardar": True, "productos": {"FRIJOL": 2}, "total": 72, "contiene": [(2, "te lo mando asi")]},
+
+    {"nombre": "Dirección y pago en mensajes separados",
+     "mensajes": ["Quiero 1 kilo de arroz",
+                  "Calle Roble 12, Colonia Centro",
+                  "En efectivo",
+                  "Va"],
+     "debe_guardar": True, "productos": {"ARROZ": 1}, "total": 30, "contiene": [(3, "te lo mando asi")]},
+
+    {"nombre": "'Sí, pero' cambia el pago",
+     "mensajes": ["Quiero 1 kilo de azúcar",
+                  "Calle Roble 12, Colonia Centro, pago en efectivo",
+                  "Sí, pero mejor con tarjeta",
+                  "Sí"],
+     "debe_guardar": True, "productos": {"AZUCAR": 1}, "total": 32, "pago": "tarjeta"},
 ]
+
+# Groserías que el agente nunca debe decir, en NINGÚN caso (las mismas que vigila la Lambda).
+GROSERIAS = re.compile(r"\b(pedos?|ching\w*|pinche\w*|wey|guey|buey|cabron\w*|verga\w*|mames|pendej\w*|culer\w*|"
+                       r"putas?|putos?|mierda\w*|madres|madrazo\w*|carajo|jod\w*)\b")
 
 
 def precios_de(valor, encontrados):
@@ -335,6 +361,12 @@ def correr_caso(n, caso, vuelta, corrida):
         if any(palabra in normal(r) for r in respuestas):
             fallas.append(f"dijo '{palabra}'")
 
+    # 4b-bis. Groserías: en todos los casos, diga lo que diga el cliente.
+    for r_ in respuestas:
+        m = GROSERIAS.search(normal(r_))
+        if m:
+            fallas.append(f"dijo la grosería '{m.group(0)}'")
+
     # 4c. Respuestas que debe dar: volver a preguntar, pedir que lo escriba, decir cuánto hay...
     if caso.get("ultima_pregunta") and "?" not in respuestas[-1] and "dime" not in normal(respuestas[-1]):
         fallas.append("no volvió a preguntar")
@@ -353,7 +385,8 @@ def correr_caso(n, caso, vuelta, corrida):
 
     herramientas = [h for t in trazas for h in t["herramientas"]]
     guardias = {g: herramientas.count(g) for g in ("SIN_TEXTO", "GUARDIA_PRECIO", "GUARDIA_CAMBIO", "GUARDIA_TOTAL",
-                                                   "GUARDIA_RESUMEN", "GUARDIA", "RESUMEN_EXACTO", "REINTENTO")}
+                                                   "GUARDIA_RESUMEN", "GUARDIA", "GUARDIA_TONO", "GUARDIA_ALGO_MAS",
+                                                   "APROBACION_DIRECTA", "RESUMEN_EXACTO", "REINTENTO")}
     fila = {"vuelta": vuelta, "caso": n, "nombre": caso["nombre"], "aprobado": not fallas,
             "fallas": "; ".join(fallas), "mensajes": len(trazas),
             "costo_usd": round(sum(t["costo_usd"] for t in trazas), 6),
@@ -411,10 +444,13 @@ if sin_resp:
 print(f"Costo total: ${costo:.4f} USD en {mensajes} mensajes (promedio ${costo / mensajes:.4f} por mensaje)")
 print(f"Tiempo de respuesta promedio: {segundos / mensajes:.1f} s por mensaje "
       f"(examen completo: {time.time() - inicio_examen:.0f} s)")
-for g in ("guardia_precio", "guardia_cambio", "guardia_total", "guardia_resumen", "guardia", "resumen_exacto",
-          "sin_texto", "reintento"):
+for g in ("guardia_precio", "guardia_cambio", "guardia_total", "guardia_resumen", "guardia", "guardia_tono",
+          "guardia_algo_mas", "aprobacion_directa", "resumen_exacto", "sin_texto", "reintento"):
     print(f"  {g}: {sum(f[g] for f in filas)}", end="")
 print()
+# La meta de la Sesión 13: bajar las correcciones de GUARDIA (antes: 19 de 234 mensajes, 8%).
+print(f"GUARDIA actuó en {sum(f['guardia'] for f in filas)} de {mensajes} mensajes "
+      f"({sum(f['guardia'] for f in filas) / mensajes:.1%})")
 
 os.makedirs("salidas", exist_ok=True)
 with open("salidas/examen_aws.csv", "w", newline="", encoding="utf-8") as f:
