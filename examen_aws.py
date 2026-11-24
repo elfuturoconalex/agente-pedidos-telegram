@@ -146,7 +146,7 @@ CASOS = [
 
     {"nombre": "Nota de voz",
      "mensajes": ["[el cliente mandó una nota de voz]"],
-     "debe_guardar": False, "ultima_contiene": "escrib"},
+     "debe_guardar": False, "ultima_contiene": ["escrib", "cuentame", "dime", "platicame"]},   # cualquiera vale
 
     # ===== Examen grande (Fase 3): lo que hace la gente real =====
     {"nombre": "Cliente grosero que sí compra",
@@ -357,8 +357,9 @@ def correr_caso(n, caso, vuelta, corrida):
             fallas.append(f"adivinó el código {c['entrada'].get('id_producto')}")
 
     # 4b. Palabras que nunca debe decir: un agotado, una grosería, datos de otro cliente, sus instrucciones...
+    # Palabra completa: "roble" no debe encontrarse dentro de "problema".
     for palabra in caso.get("no_ofrecer", []) + caso.get("no_decir", []):
-        if any(palabra in normal(r) for r in respuestas):
+        if any(re.search(r"\b" + re.escape(palabra), normal(r)) for r in respuestas):
             fallas.append(f"dijo '{palabra}'")
 
     # 4b-bis. Groserías: en todos los casos, diga lo que diga el cliente.
@@ -370,8 +371,8 @@ def correr_caso(n, caso, vuelta, corrida):
     # 4c. Respuestas que debe dar: volver a preguntar, pedir que lo escriba, decir cuánto hay...
     if caso.get("ultima_pregunta") and "?" not in respuestas[-1] and "dime" not in normal(respuestas[-1]):
         fallas.append("no volvió a preguntar")
-    if caso.get("ultima_contiene") and caso["ultima_contiene"] not in normal(respuestas[-1]):
-        fallas.append(f"no dijo '{caso['ultima_contiene']}…'")
+    if caso.get("ultima_contiene") and not any(p in normal(respuestas[-1]) for p in caso["ultima_contiene"]):
+        fallas.append(f"no pidió que lo escribiera ({', '.join(caso['ultima_contiene'])})")
     for i, texto in caso.get("contiene", []):
         if i <= len(respuestas) and texto not in normal(respuestas[i - 1]):
             fallas.append(f"en el mensaje {i} no dijo '{texto}'")
@@ -385,7 +386,7 @@ def correr_caso(n, caso, vuelta, corrida):
 
     herramientas = [h for t in trazas for h in t["herramientas"]]
     guardias = {g: herramientas.count(g) for g in ("SIN_TEXTO", "GUARDIA_PRECIO", "GUARDIA_CAMBIO", "GUARDIA_TOTAL",
-                                                   "GUARDIA_RESUMEN", "GUARDIA", "GUARDIA_TONO", "GUARDIA_ALGO_MAS",
+                                                   "GUARDIA_RESUMEN", "GUARDIA", "GUARDIA_TONO", "GUARDIA_PREPARAR",
                                                    "APROBACION_DIRECTA", "RESUMEN_EXACTO", "REINTENTO")}
     fila = {"vuelta": vuelta, "caso": n, "nombre": caso["nombre"], "aprobado": not fallas,
             "fallas": "; ".join(fallas), "mensajes": len(trazas),
@@ -395,6 +396,8 @@ def correr_caso(n, caso, vuelta, corrida):
             **{g.lower(): c for g, c in guardias.items()},
             "me_trabe": sum("me trabé" in r for r in respuestas),
             "folio": pedidos[0]["folio"] if pedidos else "", "ultima_respuesta": respuestas[-1]}
+    # Avance en vivo: así se ve que el examen sigue trabajando (el resultado completo sale al final de la vuelta).
+    print(f"  ... vuelta {vuelta}, caso {n} listo ({'pasó' if fila['aprobado'] else 'falló'})", flush=True)
     return fila, log
 
 
@@ -403,7 +406,8 @@ A_LA_VEZ = 3        # pláticas al mismo tiempo (cada una con su cliente): el ex
 corrida = int(time.time())          # cada corrida usa clientes nuevos: no hay pláticas viejas
 filas, log = [], []
 inicio_examen = time.time()
-print(f"Examen en AWS: {len(CASOS)} casos x {VUELTAS} vuelta(s) contra la Lambda {FUNCION}\n")
+print(f"Examen en AWS: {len(CASOS)} casos x {VUELTAS} vuelta(s) contra la Lambda {FUNCION}")
+print("Tarda unos 4 a 5 minutos por vuelta. No lo cortes; verás una línea por cada plática que termine.\n", flush=True)
 
 for vuelta in range(1, VUELTAS + 1):
     with ThreadPoolExecutor(A_LA_VEZ) as pool:
@@ -445,7 +449,7 @@ print(f"Costo total: ${costo:.4f} USD en {mensajes} mensajes (promedio ${costo /
 print(f"Tiempo de respuesta promedio: {segundos / mensajes:.1f} s por mensaje "
       f"(examen completo: {time.time() - inicio_examen:.0f} s)")
 for g in ("guardia_precio", "guardia_cambio", "guardia_total", "guardia_resumen", "guardia", "guardia_tono",
-          "guardia_algo_mas", "aprobacion_directa", "resumen_exacto", "sin_texto", "reintento"):
+          "guardia_preparar", "aprobacion_directa", "resumen_exacto", "sin_texto", "reintento"):
     print(f"  {g}: {sum(f[g] for f in filas)}", end="")
 print()
 # La meta de la Sesión 13: bajar las correcciones de GUARDIA (antes: 19 de 234 mensajes, 8%).

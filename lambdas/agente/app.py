@@ -19,6 +19,7 @@ import time
 import unicodedata
 import urllib.error
 import urllib.request
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -237,6 +238,21 @@ def es_aprobacion_clara(texto):
             and any(p in PALABRAS_SI for p in palabras))
 
 
+def colonia_dicha_por_el_cliente(direccion, estado):
+    """¿La colonia salió de la boca del cliente? Cada palabra de la colonia (de 3 letras o más) debe aparecer
+    en lo que el cliente escribió en la plática. Así Claude no puede inventarla ("Col. <UNKNOWN>").
+    Las palabras de la CALLE se descuentan primero: si el cliente dijo "Calle Bellavista #2", Claude no puede
+    usar "Bellavista" también como colonia (tendría que aparecer dos veces)."""
+    if "palabras_cliente" not in estado:          # sin la plática a la mano (pruebas sueltas), no se revisa
+        return True
+    def palabras(texto):
+        return [p for p in re.sub(r"[^a-z0-9 ]", " ", normal(texto)).split() if len(p) >= 3]
+    disponibles = Counter(estado["palabras_cliente"])
+    disponibles.subtract(palabras(str(direccion.get("calle") or "")))
+    colonia = re.sub(r"^(col\.?|colonia)\s+", "", str(direccion.get("colonia") or "").strip(), flags=re.IGNORECASE)
+    return all(disponibles[p] > 0 for p in palabras(colonia))
+
+
 def preparar_pedido(carrito, direccion, forma_pago, estado):
     """Paso 1 de 2, como un 'show | compare' antes del 'commit': valida todo y arma el resumen EXACTO
     que Claude le lee al cliente. Todavía no guarda nada; queda "por confirmar"."""
@@ -244,8 +260,12 @@ def preparar_pedido(carrito, direccion, forma_pago, estado):
     errores = [] if resumen["productos"] else ["El pedido está vacío."]
     errores_dir, direccion_texto = validar_direccion(direccion)
     errores += errores_dir
+    if not errores_dir and not colonia_dicha_por_el_cliente(direccion, estado):
+        errores.append("El cliente nunca dijo esa colonia. Pregúntale en qué colonia es.")
     if forma_pago not in FORMAS_DE_PAGO:
         errores.append(f"La forma de pago debe ser una de: {', '.join(FORMAS_DE_PAGO)}.")
+    elif "palabras_cliente" in estado and forma_pago not in estado["palabras_cliente"]:
+        errores.append("El cliente todavía no dijo cómo paga. Pregúntale si es en efectivo o con tarjeta.")
     if errores:
         return {"error": " ".join(errores) + " Pregúntale al cliente lo que falta; no lo inventes."}
     # Idempotente (como "agregar deja en N"): si ya había un resumen IGUAL pendiente, no se reinicia.
@@ -268,6 +288,20 @@ def preparar_pedido(carrito, direccion, forma_pago, estado):
                               "Si lo aprueba (sí, sale, va, ok, mándalo, 👍...), usa confirmar_pedido."}
 
 
+# Señales de que el cliente pide algo distinto al resumen ("sí, PERO con tarjeta", "MEJOR a otra colonia").
+SENALES_DE_CAMBIO = re.compile(r"\b(pero|mejor|cambia\w*|cambio|en vez|en lugar|agrega\w*|quita\w*|ademas|tambien|"
+                               r"otra|otro|colonia|col|calle|avenida|espera|cancela\w*|no)\b")
+
+
+def pide_cambio(texto, pc):
+    """¿El último mensaje del cliente pide un cambio? Como un 'commit check': antes de guardar, se revisa que lo
+    que dijo el cliente no contradiga el resumen. Si se equivoca, cuesta un "¿te lo mando así?" de más; nunca
+    un pedido mal guardado (caso 33: "Sí, pero mejor con tarjeta" guardó efectivo)."""
+    t = normal(texto)
+    otro_pago = any(re.search(rf"\b{p}\b", t) for p in FORMAS_DE_PAGO if p != pc.get("forma_pago"))
+    return otro_pago or SENALES_DE_CAMBIO.search(t) is not None
+
+
 def confirmar_pedido(chat_id, carrito, nombre_cliente, estado, prueba=False):
     """Paso 2 de 2 (el 'commit'): solo guarda lo que el cliente YA VIO en el resumen y aprobó en un
     mensaje posterior. El código lo exige; no depende de que Claude siga la regla."""
@@ -281,6 +315,10 @@ def confirmar_pedido(chat_id, carrito, nombre_cliente, estado, prueba=False):
                          "cliente si se lo mandas así."}
     if pc["mensaje"] == estado["update_id"]:
         return {"error": "El cliente todavía no ha visto el resumen. Léeselo y espera a que diga que sí."}
+    if pide_cambio(estado.get("texto", ""), pc):
+        return {"error": "El cliente pidió un cambio o su respuesta no es un sí limpio (por ejemplo 'sí, pero con "
+                         "tarjeta'). NO lo confirmes: si pidió un cambio, hazlo y usa preparar_pedido con los datos "
+                         "nuevos; si no, pregúntale si se lo mandas así."}
     if pc["carrito"] != carrito:
         estado["por_confirmar"] = None
         return {"error": "El pedido cambió desde el resumen. Usa preparar_pedido otra vez y léele el resumen nuevo."}
@@ -441,6 +479,9 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
     turno = [{"role": m["role"], "content": [{"text": m["content"]}]} for m in mensajes]
     traza = {"herramientas": [], "tokens_entrada": 0, "tokens_salida": 0, "paradas": []}
     estado = estado if estado is not None else {"update_id": "", "por_confirmar": None}
+    # Las palabras que el cliente SÍ escribió en la plática (para revisar que la colonia no sea inventada).
+    estado["palabras_cliente"] = (re.sub(r"[^a-z0-9 ]", " ", normal(
+        " ".join(m["content"] for m in mensajes if m["role"] == "user"))).split())
     pedido_guardado = reintento_dado = False
     guardias_usadas = set()          # cada guardia actúa una sola vez por mensaje (sin ciclos)
     precios_vistos = set()           # precios que dieron las herramientas en este mensaje
@@ -547,28 +588,37 @@ def responder(chat_id, texto, nombre_cliente, mensajes, carrito, prueba=False, e
                         "regrese; si la herramienta dice que falta algo, pregúntalo.", "preparar_pedido")
                 continue
 
-            # 4b. GUARDIA_ALGO_MAS: el cliente ya dio colonia y forma de pago, y Claude pregunta "¿algo más?" en
-            # lugar de armar el resumen. Solo actúa si el cliente SÍ dijo la colonia (para no empujarlo a inventarla).
+            # 4b. GUARDIA_PREPARAR: el cliente ya dio colonia y forma de pago, y Claude le hace OTRA pregunta
+            # ("¿algo más?", "¿hay número interior?") en lugar de armar el resumen. Solo actúa si el cliente SÍ dijo
+            # una colonia; y si Claude la inventa, preparar_pedido la rechaza (colonia_dicha_por_el_cliente).
             recientes = normal(" ".join(m["content"] for m in mensajes[-6:] if m["role"] == "user"))
             dio_pago = re.search(r"\b(efectivo|tarjeta)\b", recientes) is not None
             dio_colonia = re.search(r"\bcol\b|\bcolonia\b", recientes) is not None
             ahora_lo_dijo = re.search(r"\b(efectivo|tarjeta|col|colonia)\b", normal(texto)) is not None
-            if (carrito and "algo mas" in t and dio_pago and dio_colonia and ahora_lo_dijo and not preparo
-                    and not pedido_guardado and "GUARDIA_ALGO_MAS" not in guardias_usadas):
-                guardia("GUARDIA_ALGO_MAS", "El cliente ya te dio la dirección y la forma de pago. No preguntes "
-                        "si quiere algo más: usa preparar_pedido y léele el resumen; si falta algo, pregúntalo.",
+            if (carrito and "?" in t and dio_pago and dio_colonia and ahora_lo_dijo and not preparo
+                    and not pedido_guardado and "GUARDIA_PREPARAR" not in guardias_usadas):
+                guardia("GUARDIA_PREPARAR", "El cliente ya te dio la dirección y la forma de pago. No le hagas "
+                        "otra pregunta: usa preparar_pedido y léele el resumen; si falta algo, pregúntalo.",
                         "preparar_pedido")
                 continue
 
             # 5. GUARDIA: ¿dice que ya quedó (confirmado, folio, "ahí va", "en camino") sin haberlo guardado?
             # Se revisan solo las afirmaciones: las preguntas ("¿te lo confirmo?") se quitan antes.
             afirmaciones = re.sub(r"¿[^?]*\?", " ", t)
+            # Sesión 13: también "tu pedido está listo" y "te llega en poco" (caso del sticker 🐱). El "listo"
+            # suelto NO cuenta: Claude lo usa todo el tiempo ("Listo, compa, ya tienes 2 kilos").
             dice_que_quedo = re.search(r"\b(confirmad[oa]|folio|en camino|ahi va tu pedido|ya va tu pedido|"
-                                       r"te llegara|quedo listo)\b", afirmaciones)
+                                       r"te llegara|te llegan?|quedo listo|pedido (esta|quedo|ya esta) listo|"
+                                       r"listo tu pedido|ya lo (mande|envie)|te lo (mande|envie)|"
+                                       r"ya salio)\b", afirmaciones)
             if dice_que_quedo and not pedido_guardado and carrito and "GUARDIA" not in guardias_usadas:
                 if estado.get("por_confirmar"):
-                    guardia("GUARDIA", "Dijiste que el pedido quedó, pero no usaste confirmar_pedido. Úsala "
-                            "ahora; si el sistema la rechaza, sigue lo que te diga.", "confirmar_pedido")
+                    # Sesión 13: ya NO se obliga a confirmar. Los "sí" claros ya los confirmó el ATAJO; si llegamos
+                    # aquí, el cliente no dio un sí claro (pudo preguntar "¿en cuánto llega?") y el código no debe
+                    # decidir por él. Claude decide, con las mismas protecciones de confirmar_pedido.
+                    guardia("GUARDIA", "Dijiste que el pedido quedó, pero NO está guardado. Si el cliente aprobó el "
+                            "resumen, usa confirmar_pedido; si no está claro, no digas que quedó y pregúntale si se "
+                            "lo mandas así.")
                 else:
                     guardia("GUARDIA", "Dijiste que el pedido quedó, pero todavía no hay resumen ni pedido "
                             "guardado. Usa preparar_pedido y léele el resumen al cliente.", "preparar_pedido")

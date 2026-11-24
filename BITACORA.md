@@ -514,3 +514,44 @@ En el intento 1 la **guardia** actuó: Claude dijo "confirmado" sin guardar y la
 - Tono y guardia, y otro examen de 3 vueltas.
 - Cierre de la Fase 3: PNG del diagrama de Lucid, README final, estimado vs. real y costo en Billing.
 - ADR 004 a futuro: botones y recordatorios, incluido WhatsApp.
+
+## Sesión 13: Sin groserías, el "sí" claro y datos que dijo el cliente (Fase 3)
+*15 y 23 de noviembre de 2026*
+
+### Qué hice
+- **Tono sin groserías:** regla nueva ("nunca, aunque el cliente las diga o insulte") y `GUARDIA_TONO`: si se le sale una, el código le pide reescribir la respuesta antes de mandarla.
+- **Atajo para el "sí" (`APROBACION_DIRECTA`):** si el cliente contesta al resumen con un sí limpio ("sí", "sale", "va", un 👍), el código obliga a usar `confirmar_pedido` desde la primera vuelta. Antes Claude escribía "confirmado" sin usarla y la `GUARDIA` tenía que regresarlo (una vuelta extra).
+- **`GUARDIA_PREPARAR`:** si el cliente ya dio colonia y forma de pago y Claude hace otra pregunta ("¿algo más?", "¿hay número interior?"), el código lo obliga a armar el resumen.
+- **La colonia y la forma de pago tienen que salir del cliente:** si Claude las inventa ("Col. <UNKNOWN>", copiar la calle como colonia, "efectivo" sin que nadie lo dijera), el resumen no se arma y Claude pregunta.
+- **`confirmar_pedido` revisa el último mensaje (como un `commit check`):** "sí, pero con tarjeta" o "mejor a otra colonia" ya no se guardan; Claude hace el cambio y rehace el resumen.
+- **La `GUARDIA` ya no obliga a confirmar, solo avisa:** los "sí" claros ya los confirma el atajo; si se llega a la `GUARDIA`, el cliente no dio un sí claro y el código no debe decidir por él. También reconoce "tu pedido está listo" y "te llega".
+- **Examen de 30 a 33 casos:** cliente que habla con groserías de cuates, dirección y pago en mensajes separados, y "sí, pero" cambia el pago. Ahora revisa groserías en todas las respuestas, busca palabras completas y muestra el avance en vivo.
+
+### El camino del examen
+| Corrida | Resultado | Qué encontró |
+|---|---|---|
+| Sesión 12 (punto de partida) | 89/90 | `GUARDIA` en 19 de 234 mensajes |
+| Tono, atajo y "¿algo más?" | 94/99 | `GUARDIA` bajó a 1, pero Claude inventó la colonia y se guardó (2 de 3) |
+| Colonia dicha por el cliente | 96/99 | Con un sticker 🐱 dijo "tu pedido está listo" sin haber guardado nada |
+| La `GUARDIA` avisa, no obliga | 97/99 | "Sí, pero mejor con tarjeta" guardó efectivo; inventó "efectivo" en otro caso |
+| Pago dicho por el cliente y `commit check` | **99/99** | — |
+
+### Números reales
+| Dato | Valor |
+|---|---|
+| Examen final | 99/99 (100%) · US$1.93 por 267 mensajes · 2.0 s por mensaje |
+| Correcciones de `GUARDIA` | 2 de 267 mensajes (0.7%); antes 19 de 234 (8%) |
+| Atajo del "sí" | 46 veces en el examen final |
+| Groserías que llegaron al cliente | 0 en los 4 exámenes (1,068 mensajes) |
+| Costo de la sesión | 4 exámenes, ~US$7.60 |
+
+### Qué aprendí
+- **Quitar un síntoma puede destapar otro.** Al quitar la vuelta extra de la `GUARDIA` salieron errores que estaban escondidos: la colonia inventada y el "sí, pero" guardado. Solo los encontró el examen de 3 vueltas que revisa lo que quedó en la base.
+- **El código decide solo lo que es seguro decidir.** Un "sí" limpio lo confirma el código; "sí, pero..." o "¿en cuánto llega?" no. Si hay duda, se pregunta: un mensaje de más es mucho mejor que un pedido mal guardado.
+- **Revisar de dónde viene el dato, no solo su forma.** Una colonia de 3 letras pasaba la validación aunque fuera inventada. Ahora se revisa que haya salido del cliente, como uRPF revisa que el paquete llegó por la interfaz correcta.
+- **Una lista de frases es como las firmas de un IPS:** sirve, pero siempre falta una ("está listo", "te llega"). Por eso la última defensa es estructural: el resumen que vence y el `commit check`.
+- **El examen también tiene bugs.** "roble" se encontraba dentro de "problema", y "cuéntame" no contaba como "escríbeme". Eran fallas del examen, no del agente.
+
+### Siguiente
+- Cierre de la Fase 3: PNG del diagrama de Lucid, README final, estimado vs. real y costo en Billing.
+- ADR 004 a futuro: botones y recordatorios ("¿te lo mando?"), incluido WhatsApp.
